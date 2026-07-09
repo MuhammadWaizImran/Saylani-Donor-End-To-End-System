@@ -1,26 +1,198 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* Kept defined (but never activated) so any leftover `dark:` utilities stay
+   inert instead of falling back to the media-query variant. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  /* SMIT blue — exact primary/dark lifted from saylanimit.com (#0B73B7 / #005A94) */
+  --color-brand-50: #eaf4fc;
+  --color-brand-100: #d6e9f7;
+  --color-brand-200: #c2dbf3;
+  --color-brand-300: #9dcdea;
+  --color-brand-400: #6bb3e0;
+  --color-brand-500: #3a96d4;
+  --color-brand-600: #1584c9;
+  --color-brand-700: #0b73b7;
+  --color-brand-800: #005a94;
+  --color-brand-850: #004d80;
+  --color-brand-900: #003d66;
+  --color-brand-950: #00263f;
+
+  /* SMIT bright green — exact accent lifted from saylanimit.com (#8CC544 / #6DA800) */
+  --color-accent-50: #f5faeb;
+  --color-accent-100: #e8f4d1;
+  --color-accent-200: #d3eaa8;
+  --color-accent-300: #b8dc78;
+  --color-accent-400: #9fd156;
+  --color-accent-500: #8cc544;
+  --color-accent-600: #6da800;
+  --color-accent-700: #558124;
+  --color-accent-800: #446621;
+  --color-accent-900: #3a561f;
+  --color-accent-950: #1d2f0c;
+
+  --color-surface: #ffffff;
+  --color-surface-muted: #f3f7fa;
+  --color-ink: #0e1d29;
+  --color-ink-muted: #6f6f6f;
+  --color-edge: #dde8ef;
+
+  --animate-marquee: marquee 30s linear infinite;
+  --animate-fade-rise: fade-rise 0.8s ease-out both;
+  --animate-fade-rise-delay: fade-rise 0.8s ease-out 0.2s both;
+  --animate-fade-rise-delay-2: fade-rise 0.8s ease-out 0.4s both;
+
+  @keyframes marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+
+  @keyframes fade-rise {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 }
 
+:root {
+  color-scheme: light;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Accent words inside headings (e.g. "Beyond <em>charity</em>") keep their
+   muted color but drop the italic slant — Montserrat reads as a clean,
+   professional sans, same as saylanimit.com. */
+h1 em,
+h2 em,
+h3 em,
+.font-display em {
+  font-style: normal;
+}
+
+::selection {
+  background: var(--color-accent-300);
+  color: #0c1407;
+}
+
+/* ── Homepage typography (scoped) ─────────────────────────────
+   Plain, professional, decent sans — no brand-font flourish. Only
+   the homepage ("/") uses this; the rest of the site keeps Montserrat. */
+.homepage-font,
+.homepage-font input,
+.homepage-font select,
+.homepage-font textarea,
+.homepage-font button {
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+.homepage-font h1,
+.homepage-font h2,
+.homepage-font h3,
+.homepage-font .font-display {
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* ── Portal card glow ──────────────────────────────────────────
+   A slow-shifting gradient "lightning" border (brand blue → accent
+   green) sitting just outside every card's edge, plus a soft ambient
+   glow that intensifies on hover. Uses a masked pseudo-element so the
+   glow traces the exact rounded-corner shape of its host. */
+.portal-glow {
+  position: relative;
+  isolation: isolate;
+  transition:
+    box-shadow 0.3s ease,
+    transform 0.2s ease;
+  box-shadow:
+    0 0 0 1px rgba(11, 115, 183, 0.07),
+    0 6px 20px -8px rgba(11, 115, 183, 0.18);
+}
+
+.portal-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: linear-gradient(
+    115deg,
+    var(--color-brand-500),
+    var(--color-accent-500),
+    var(--color-brand-400),
+    var(--color-accent-400)
+  );
+  background-size: 300% 300%;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0.4;
+  transition: opacity 0.3s ease;
+  animation: portal-glow-shift 7s ease-in-out infinite;
+}
+
+.portal-glow:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 0 1px rgba(11, 115, 183, 0.16),
+    0 14px 32px -10px rgba(109, 168, 0, 0.3),
+    0 10px 28px -8px rgba(11, 115, 183, 0.28);
+}
+
+.portal-glow:hover::before {
+  opacity: 1;
+}
+
+@keyframes portal-glow-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SMIT Donations — Frontend
 
-## Getting Started
+A production-quality, frontend-only donation platform for **SMIT (Saylani Mass IT Training)**, built with Next.js App Router. All data is mocked behind an API-shaped data layer so a real backend can be swapped in later without touching UI components.
 
-First, run the development server:
+## Tech stack
+
+- **Next.js 16** (App Router, Turbopack, React Compiler) + **React 19** + **TypeScript**
+- **Tailwind CSS v4** — green & white editorial theme (Instrument Serif display + Inter body), light mode only
+- **Cinematic video backgrounds** (`public/media/*.mp4`) with seamless rAF fade-loop (`components/media/video-background.tsx`)
+- **React Three Fiber + drei** — 3D particle overlay on the hero, plus a pulsing heart/globe scene in the Mission section
+- **Framer Motion** — fade-rise entrances, scroll reveals, animated progress bars/counters, wizard transitions, confetti
+- **lucide-react** icons (+ inline SVG brand/social icons)
+
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev      # http://localhost:3000
+npm run build    # production build
+npm run lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Pages
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Route | Description |
+| --- | --- |
+| `/` | Fullscreen video hero + 3D particles, live stats bar, donation ticker, featured campaigns, 3D mission section, fullscreen impact-video section, trust pillars, testimonials |
+| `/campaigns` | Grid with search + category/urgency/location filters (`?status=urgent` deep-links) |
+| `/campaigns/[id]` | Story, gallery, animated progress, amount selector, recent donors, share buttons |
+| `/donate` | 4-step wizard: amount → donor details → payment method (JazzCash/Easypaisa/bank/card UI) → animated confirmation |
+| `/about` | Mission, impact stats, timeline, team, certifications/trust badges |
+| `/dashboard` | Mock donor dashboard: history table, receipt buttons, saved payment methods |
+| `/contact` | Validated contact form, WhatsApp/phone/email links, embedded map |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Project structure
 
-## Learn More
+```
+app/                  # Routes (App Router)
+components/
+  layout/             # Header (sticky, mobile menu), footer, newsletter form
+  home/               # Hero, stats bar, ticker, trust, testimonials
+  campaigns/          # Card, explorer (filters), gallery, donation panel, donors, share
+  donate/             # 4-step donation wizard
+  three/              # R3F hero scene + quality-degrading loader
+  ui/                 # Logo, badges, progress bar, counter, theme toggle, skeletons
+lib/
+  api.ts              # ★ Data layer — swap these functions for real API calls later
+  mock-data/          # Campaigns, donations, donors, testimonials, team
+  utils.ts            # Currency (PKR), percent, time-ago helpers
+types/                # Shared TypeScript interfaces (Campaign, Donation, Donor…)
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Backend swap plan
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Every component gets data through the async functions in `lib/api.ts` (`getCampaigns()`, `getCampaign(id)`, `getDonations(campaignId)`, `getSiteStats()`, …). To connect a real backend/Supabase, replace only those function bodies — signatures and types are already API-shaped.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Notes
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **No real payments** — the payment step is UI only; the confirmation screen says so explicitly.
+- **Performance** — 3D layers lazy-load client-side only, drop particle count/DPR on mobile, and are skipped entirely under `prefers-reduced-motion`.
+- **Theming** — white-only, green accents (`brand-*` deep greens, `accent-*` bright greens in `globals.css`). Dark mode was removed by request.
+- **Media** — real photos/videos live in `public/media/` (sourced from the project's "videos and images" folder).
+- **Accessibility** — semantic landmarks, skip link, labeled forms with inline validation, `aria` on progress bars/steps, keyboard-reachable controls.

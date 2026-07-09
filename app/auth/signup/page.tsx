@@ -1,0 +1,202 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
+import { HandCoins, ShieldCheck, UserPlus } from "lucide-react";
+import type { UserRole } from "@/types/management";
+import { signUp } from "@/lib/auth";
+import { cn } from "@/lib/utils";
+
+const roles: Array<{ id: Extract<UserRole, "admin" | "donor">; label: string; icon: typeof ShieldCheck; blurb: string }> = [
+  { id: "donor", label: "Donor", icon: HandCoins, blurb: "Track the impact of your giving across every campus." },
+  { id: "admin", label: "Admin", icon: ShieldCheck, blurb: "Manage campuses, students, trainers, and placements." },
+];
+
+export default function SignupPage() {
+  const router = useRouter();
+  const [role, setRole] = useState<"admin" | "donor">("donor");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [adminCode, setAdminCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (name.trim().length < 3) {
+      setError("Please enter your full name (min 3 characters).");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters.");
+      return;
+    }
+    if (password !== confirm) {
+      setError("Passwords do not match.");
+      return;
+    }
+    if (role === "admin" && adminCode.trim().length === 0) {
+      setError("Admin signups need the invite code.");
+      return;
+    }
+    setBusy(true);
+    const result = await signUp({ name, email, password, role, adminCode });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    router.push("/portal");
+  };
+
+  return (
+    <div className="mx-auto flex min-h-[80svh] max-w-md flex-col justify-center px-6 py-16">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6 }}
+      >
+        <p className="mb-3 text-center text-xs font-semibold uppercase tracking-[0.2em] text-accent-600">
+          Saylani portal
+        </p>
+        <h1 className="text-center font-display text-4xl tracking-tight text-black sm:text-5xl">
+          Create your <em className="text-[#6F6F6F]">account</em>
+        </h1>
+
+        {/* Role selector */}
+        <div role="radiogroup" aria-label="Account type" className="mt-8 grid grid-cols-2 gap-3">
+          {roles.map(({ id, label, icon: Icon, blurb }) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={role === id}
+              onClick={() => {
+                setRole(id);
+                setError(null);
+              }}
+              className={cn(
+                "rounded-2xl border-2 p-4 text-left transition-colors",
+                role === id ? "border-brand-600 bg-brand-50" : "border-edge hover:border-brand-300",
+              )}
+            >
+              <Icon
+                className={cn("h-5 w-5", role === id ? "text-brand-700" : "text-ink-muted")}
+                aria-hidden
+              />
+              <span className="mt-2 block text-sm font-bold text-ink">{label}</span>
+              <span className="mt-1 block text-xs leading-relaxed text-ink-muted">{blurb}</span>
+            </button>
+          ))}
+        </div>
+
+        <form onSubmit={onSubmit} noValidate className="mt-6 space-y-4">
+          <div>
+            <label htmlFor="signup-name" className="block text-sm font-bold text-ink">
+              Full name
+            </label>
+            <input
+              id="signup-name"
+              type="text"
+              autoComplete="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Ahmed Raza"
+              className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label htmlFor="signup-email" className="block text-sm font-bold text-ink">
+              Email
+            </label>
+            <input
+              id="signup-email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="signup-password" className="block text-sm font-bold text-ink">
+                Password
+              </label>
+              <input
+                id="signup-password"
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Min 6 characters"
+                className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label htmlFor="signup-confirm" className="block text-sm font-bold text-ink">
+                Confirm
+              </label>
+              <input
+                id="signup-confirm"
+                type="password"
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder="Repeat password"
+                className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          {role === "admin" && (
+            <div>
+              <label htmlFor="signup-admin-code" className="block text-sm font-bold text-ink">
+                Admin invite code
+              </label>
+              <input
+                id="signup-admin-code"
+                type="password"
+                value={adminCode}
+                onChange={(e) => setAdminCode(e.target.value)}
+                placeholder="Provided by an existing admin"
+                className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+              />
+            </div>
+          )}
+
+          {error && (
+            <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-brand-700 px-6 py-3.5 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-60"
+          >
+            <UserPlus className="h-4 w-4 text-accent-400" aria-hidden />
+            {busy ? "Creating account…" : `Create ${role} account`}
+          </button>
+        </form>
+
+        <p className="mt-6 text-center text-sm text-[#6F6F6F]">
+          Already registered?{" "}
+          <Link href="/auth/login" className="font-semibold text-brand-700 hover:underline">
+            Log in
+          </Link>
+        </p>
+      </motion.div>
+    </div>
+  );
+}

@@ -6,22 +6,45 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:setup": "tsx scripts/db-setup.ts",
+    "db:seed": "tsx scripts/db-seed.ts",
+    "auth:seed": "tsx scripts/auth-seed.ts",
+    "agent:test": "tsx --env-file=.env.local scripts/agent-test.ts",
+    "e2e": "tsx --env-file=.env.local scripts/e2e-test.ts",
+    "load:seed": "tsx --env-file=.env.local scripts/load-seed.ts",
+    "load:clean": "tsx --env-file=.env.local scripts/load-clean.ts",
+    "load:test": "tsx --env-file=.env.local scripts/load-test.ts",
+    "load:seed-all": "tsx --env-file=.env.local scripts/load-seed-all.ts"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.110.1",
+    "docx": "^9.7.1",
+    "framer-motion": "^12.42.2",
+    "lucide-react": "^1.23.0",
     "next": "16.2.10",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "three": "^0.185.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.185.0",
     "babel-plugin-react-compiler": "1.0.0",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "pg": "^8.22.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.0",
     "typescript": "^5"
   }
 }

@@ -1,0 +1,28 @@
+import type { Donation } from "@/types";
+
+export const donations: Donation[] = [
+  { id: "d1", campaignId: "c2", donorName: "Ali Hassan", amount: 15000, currency: "PKR", isAnonymous: false, message: "May Allah protect every family. Stay strong Sindh.", createdAt: "2026-07-06T07:42:00Z" },
+  { id: "d2", campaignId: "c4", donorName: "Anonymous", amount: 6000, currency: "PKR", isAnonymous: true, createdAt: "2026-07-06T06:15:00Z" },
+  { id: "d3", campaignId: "c1", donorName: "Fatima Zahra", amount: 25000, currency: "PKR", isAnonymous: false, message: "For one full sponsorship. Good luck to the student!", createdAt: "2026-07-05T21:03:00Z" },
+  { id: "d4", campaignId: "c8", donorName: "Usman Sheikh", amount: 7500, currency: "PKR", isAnonymous: false, message: "One ration pack, from my late mother's sadaqah.", createdAt: "2026-07-05T18:30:00Z" },
+  { id: "d5", campaignId: "c2", donorName: "Anonymous", amount: 50000, currency: "PKR", isAnonymous: true, createdAt: "2026-07-05T15:12:00Z" },
+  { id: "d6", campaignId: "c9", donorName: "Sana Mirza", amount: 3500, currency: "PKR", isAnonymous: false, message: "One session for someone's father or mother.", createdAt: "2026-07-05T11:47:00Z" },
+  { id: "d7", campaignId: "c3", donorName: "Bilal Ahmed", amount: 10000, currency: "PKR", isAnonymous: false, createdAt: "2026-07-05T09:20:00Z" },
+  { id: "d8", campaignId: "c4", donorName: "Ayesha Khan", amount: 1200, currency: "PKR", isAnonymous: false, message: "Six meals inshaAllah.", createdAt: "2026-07-04T22:55:00Z" },
+  { id: "d9", campaignId: "c7", donorName: "Hamza Farooq", amount: 20000, currency: "PKR", isAnonymous: false, message: "Sponsoring one seat. My sister graduated from SMIT — it works.", createdAt: "2026-07-04T19:31:00Z" },
+  { id: "d10", campaignId: "c2", donorName: "Zainab Qureshi", amount: 7500, currency: "PKR", isAnonymous: false, createdAt: "2026-07-04T16:08:00Z" },
+  { id: "d11", campaignId: "c5", donorName: "Anonymous", amount: 25000, currency: "PKR", isAnonymous: true, message: "Medicine stock for one camp.", createdAt: "2026-07-04T12:40:00Z" },
+  { id: "d12", campaignId: "c1", donorName: "Omar Siddiqui", amount: 5000, currency: "PKR", isAnonymous: false, createdAt: "2026-07-04T08:19:00Z" },
+  { id: "d13", campaignId: "c9", donorName: "Mahnoor Baig", amount: 42000, currency: "PKR", isAnonymous: false, message: "One month for one patient. Get well soon.", createdAt: "2026-07-03T20:26:00Z" },
+  { id: "d14", campaignId: "c8", donorName: "Anonymous", amount: 15000, currency: "PKR", isAnonymous: true, createdAt: "2026-07-03T17:44:00Z" },
+  { id: "d15", campaignId: "c3", donorName: "Ibrahim Shaikh", amount: 450000, currency: "PKR", isAnonymous: false, message: "Full well in memory of my father, Haji Abdul Shaikh.", createdAt: "2026-07-03T14:02:00Z" },
+  { id: "d16", campaignId: "c4", donorName: "Rabia Aslam", amount: 200, currency: "PKR", isAnonymous: false, message: "One meal. Wish I could do more.", createdAt: "2026-07-03T10:33:00Z" },
+  { id: "d17", campaignId: "c2", donorName: "Danish Ali", amount: 35000, currency: "PKR", isAnonymous: false, message: "Shelter for one family.", createdAt: "2026-07-02T23:11:00Z" },
+  { id: "d18", campaignId: "c7", donorName: "Anonymous", amount: 5000, currency: "PKR", isAnonymous: true, createdAt: "2026-07-02T19:58:00Z" },
+  { id: "d19", campaignId: "c6", donorName: "Khadija Noor", amount: 8000, currency: "PKR", isAnonymous: false, message: "One month for one child.", createdAt: "2026-07-02T15:27:00Z" },
+  { id: "d20", campaignId: "c5", donorName: "Taha Jamil", amount: 1000, currency: "PKR", isAnonymous: false, createdAt: "2026-07-02T11:05:00Z" },
+  { id: "d21", campaignId: "c1", donorName: "Maryam Iqbal", amount: 12500, currency: "PKR", isAnonymous: false, message: "Half a sponsorship — will send the rest next month!", createdAt: "2026-07-01T20:49:00Z" },
+  { id: "d22", campaignId: "c9", donorName: "Anonymous", amount: 100000, currency: "PKR", isAnonymous: true, createdAt: "2026-07-01T16:22:00Z" },
+  { id: "d23", campaignId: "c8", donorName: "Adeel Rahman", amount: 22500, currency: "PKR", isAnonymous: false, message: "Three families, three months of dua for my parents.", createdAt: "2026-07-01T12:15:00Z" },
+  { id: "d24", campaignId: "c10", donorName: "Hira Shahid", amount: 30000, currency: "PKR", isAnonymous: false, message: "So glad the school is open again!", createdAt: "2026-06-30T18:37:00Z" },
+];
