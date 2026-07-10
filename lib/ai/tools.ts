@@ -263,6 +263,50 @@ export const toolDefinitions = [
       },
     },
   },
+  {
+    type: "function" as const,
+    function: {
+      name: "update_record",
+      description:
+        "ADMIN ONLY: edit an EXISTING record. Pick the entity type, identify the row (student/donation: prefer email or id — names collide; trainer/course/campus/active_class/campaign: name or id works), and pass only the fields you want to change. Unknown/omitted fields are left untouched. Call the matching list_* tool first if you're not sure the identifier is unique.",
+      parameters: {
+        type: "object",
+        properties: {
+          entity: {
+            type: "string",
+            enum: ["student", "trainer", "course", "campus", "active_class", "campaign", "donation"],
+          },
+          identifier: { type: "string", description: "Name, email, or id of the record to update" },
+          fields: {
+            type: "object",
+            description:
+              "Only the fields to change, e.g. {\"progress_percent\": 80, \"placement_status\": \"placed\"} for a student, or {\"salary\": 190000} for a trainer. Field names match the create_* tool argument names for that entity (campus/course/trainer/trainer values are names, resolved automatically).",
+            additionalProperties: true,
+          },
+        },
+        required: ["entity", "identifier", "fields"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "delete_record",
+      description:
+        "ADMIN ONLY: permanently delete a record. Confirm with the admin before calling this (e.g. \"Delete Ali Khan's student record — are you sure?\") unless they already said something unambiguous like \"yes delete it\". Deleting a campus/trainer/course/campaign that still has students/donations attached is refused — remove or reassign those first.",
+      parameters: {
+        type: "object",
+        properties: {
+          entity: {
+            type: "string",
+            enum: ["student", "trainer", "course", "campus", "active_class", "campaign", "donation"],
+          },
+          identifier: { type: "string", description: "Name, email, or id of the record to delete" },
+        },
+        required: ["entity", "identifier"],
+      },
+    },
+  },
 ];
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -331,6 +375,49 @@ function matchByName<T extends { id: string; name?: string; title?: string }>(
 const err = (message: string) => JSON.stringify({ error: message });
 const argStr = (args: Record<string, unknown>, key: string) => String(args[key] ?? "").trim();
 
+interface StudentRow {
+  id: string;
+  name: string;
+  email: string;
+  campus_id: string;
+  course_id: string;
+  trainer_id: string;
+}
+
+/** Finds one student by id/email (exact, indexed — works at any table size)
+ *  or falls back to a bounded, ambiguity-checked name search. Never fetches
+ *  the whole students table. */
+async function findStudent(
+  identifier: string,
+): Promise<{ row: StudentRow } | { error: string }> {
+  const q = identifier.trim();
+  const db = supabaseServer();
+  const safe = q.replace(/[%,()]/g, " ").trim();
+
+  const { data: exact, error: exactErr } = await db
+    .from("students")
+    .select("id,name,email,campus_id,course_id,trainer_id")
+    .or(`id.eq.${safe},email.eq.${safe}`)
+    .limit(1);
+  if (exactErr) return { error: exactErr.message };
+  if (exact?.[0]) return { row: exact[0] as StudentRow };
+
+  const { data: byName, error: nameErr } = await db
+    .from("students")
+    .select("id,name,email,campus_id,course_id,trainer_id")
+    .ilike("name", `%${safe}%`)
+    .limit(5);
+  if (nameErr) return { error: nameErr.message };
+  if (!byName || byName.length === 0) {
+    return { error: `Student not found: "${identifier}". Try their email or use list_students to search.` };
+  }
+  if (byName.length > 1) {
+    const options = byName.map((s) => `${s.name} (${s.email})`).join(", ");
+    return { error: `Multiple students match "${identifier}": ${options}. Use their email to pick one.` };
+  }
+  return { row: byName[0] as StudentRow };
+}
+
 /** Execute a tool call with role-based scoping. Returns a JSON string. */
 export async function executeTool(
   name: string,
@@ -341,7 +428,12 @@ export async function executeTool(
   const db = supabaseServer();
 
   /* Writes are admin-only. */
-  if (name.startsWith("create_") || name.startsWith("record_")) {
+  if (
+    name.startsWith("create_") ||
+    name.startsWith("record_") ||
+    name.startsWith("update_") ||
+    name.startsWith("delete_")
+  ) {
     if (ctx.role !== "admin") {
       return err("Permission denied: only admins can add or modify data.");
     }
@@ -731,6 +823,338 @@ export async function executeTool(
         id,
         message: `Donation of Rs. ${amount.toLocaleString()} recorded against "${campaign.title}". Raised total updated.`,
       });
+    }
+
+    case "update_record": {
+      const entity = argStr(args, "entity");
+      const identifier = argStr(args, "identifier");
+      const fields = (typeof args.fields === "object" && args.fields ? args.fields : {}) as Record<string, unknown>;
+      if (!identifier) return err("identifier is required.");
+      if (Object.keys(fields).length === 0) return err("fields is empty — nothing to update.");
+
+      switch (entity) {
+        case "student": {
+          const found = await findStudent(identifier);
+          if ("error" in found) return err(found.error);
+          const patch: Record<string, unknown> = {};
+          if ("name" in fields) patch.name = String(fields.name);
+          if ("email" in fields) patch.email = String(fields.email);
+          if ("phone" in fields) patch.phone = String(fields.phone);
+          if ("enrollment_status" in fields) patch.enrollment_status = String(fields.enrollment_status);
+          if ("progress_percent" in fields) patch.progress_percent = Number(fields.progress_percent);
+          if ("attendance_percent" in fields) patch.attendance_percent = Number(fields.attendance_percent);
+          if ("placement_status" in fields) patch.placement_status = String(fields.placement_status);
+          if ("company" in fields) patch.company = String(fields.company);
+          if ("monthly_salary_pkr" in fields) patch.salary = Number(fields.monthly_salary_pkr);
+          if ("placement_date" in fields) patch.placement_date = String(fields.placement_date);
+          if ("campus" in fields) {
+            const campus = matchByName(await getCampuses(), String(fields.campus));
+            if (!campus) return err(`Campus not found: "${fields.campus}".`);
+            patch.campus_id = campus.id;
+          }
+          if ("course" in fields) {
+            const course = matchByName(await getCourses(), String(fields.course));
+            if (!course) return err(`Course not found: "${fields.course}".`);
+            patch.course_id = course.id;
+          }
+          if ("trainer" in fields) {
+            const studentTrainer = matchByName(await getTrainers(), String(fields.trainer));
+            if (!studentTrainer) return err(`Trainer not found: "${fields.trainer}".`);
+            patch.trainer_id = studentTrainer.id;
+          }
+          const { error } = await db.from("students").update(patch).eq("id", found.row.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, id: found.row.id, message: `Updated ${found.row.name}.` });
+        }
+
+        case "trainer": {
+          const t = matchByName(await getTrainers(), identifier);
+          if (!t) return err(`Trainer not found: "${identifier}". Use list_trainers to see options.`);
+          const patch: Record<string, unknown> = {};
+          if ("name" in fields) patch.name = String(fields.name);
+          if ("email" in fields) patch.email = String(fields.email);
+          if ("specialization" in fields) patch.specialization = String(fields.specialization);
+          if ("monthly_salary_pkr" in fields) patch.salary = Number(fields.monthly_salary_pkr);
+          if ("campus" in fields) {
+            const campus = matchByName(await getCampuses(), String(fields.campus));
+            if (!campus) return err(`Campus not found: "${fields.campus}".`);
+            patch.campus_id = campus.id;
+          }
+          const { error } = await db.from("trainers").update(patch).eq("id", t.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, id: t.id, message: `Updated ${t.name}.` });
+        }
+
+        case "course": {
+          const c = matchByName(await getCourses(), identifier);
+          if (!c) return err(`Course not found: "${identifier}". Use list_courses to see options.`);
+          const patch: Record<string, unknown> = {};
+          if ("name" in fields) patch.name = String(fields.name);
+          if ("status" in fields) patch.status = String(fields.status);
+          if ("duration_months" in fields) patch.duration_months = Number(fields.duration_months);
+          if ("started_at" in fields) patch.started_at = String(fields.started_at);
+          if ("campus" in fields) {
+            const campus = matchByName(await getCampuses(), String(fields.campus));
+            if (!campus) return err(`Campus not found: "${fields.campus}".`);
+            patch.campus_id = campus.id;
+          }
+          if ("trainer" in fields) {
+            const courseTrainer = matchByName(await getTrainers(), String(fields.trainer));
+            if (!courseTrainer) return err(`Trainer not found: "${fields.trainer}".`);
+            patch.trainer_id = courseTrainer.id;
+          }
+          const { error } = await db.from("courses").update(patch).eq("id", c.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, id: c.id, message: `Updated ${c.name}.` });
+        }
+
+        case "campus": {
+          const c = matchByName(await getCampuses(), identifier);
+          if (!c) return err(`Campus not found: "${identifier}". Use list_campuses to see options.`);
+          const patch: Record<string, unknown> = {};
+          if ("name" in fields) patch.name = String(fields.name);
+          if ("city" in fields) patch.city = String(fields.city);
+          if ("address" in fields) patch.address = String(fields.address);
+          if ("established" in fields) patch.established = String(fields.established);
+          const { error } = await db.from("campuses").update(patch).eq("id", c.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, id: c.id, message: `Updated ${c.name}.` });
+        }
+
+        case "active_class": {
+          const { classes } = await searchActiveClasses({ pageSize: 50, query: identifier });
+          const cls = matchByName(classes, identifier);
+          if (!cls) return err(`Active class not found: "${identifier}". Use list_active_classes to see options.`);
+          const patch: Record<string, unknown> = {};
+          if ("name" in fields) patch.name = String(fields.name);
+          if ("student_count" in fields) patch.student_count = Number(fields.student_count);
+          if ("timing" in fields) patch.timing = String(fields.timing);
+          if ("campus" in fields) {
+            const campus = matchByName(await getCampuses(), String(fields.campus));
+            if (!campus) return err(`Campus not found: "${fields.campus}".`);
+            patch.campus_id = campus.id;
+          }
+          if ("trainer" in fields) {
+            const classTrainer = matchByName(await getTrainers(), String(fields.trainer));
+            if (!classTrainer) return err(`Trainer not found: "${fields.trainer}".`);
+            patch.trainer_id = classTrainer.id;
+          }
+          if ("course" in fields) {
+            const course = matchByName(await getCourses(), String(fields.course));
+            if (!course) return err(`Course not found: "${fields.course}".`);
+            patch.course_id = course.id;
+          }
+          const { error } = await db.from("active_classes").update(patch).eq("id", cls.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, id: cls.id, message: `Updated class "${cls.name}".` });
+        }
+
+        case "campaign": {
+          const { data: campaignRows, error: cErr } = await db.from("campaigns").select("id,title");
+          if (cErr) return err(cErr.message);
+          const campaign = matchByName((campaignRows ?? []) as Array<{ id: string; title: string }>, identifier);
+          if (!campaign) return err(`Campaign not found: "${identifier}". Check the exact title or id.`);
+          const patch: Record<string, unknown> = {};
+          if ("title" in fields) patch.title = String(fields.title);
+          if ("tagline" in fields) patch.tagline = String(fields.tagline);
+          if ("description" in fields) patch.description = String(fields.description);
+          if ("category" in fields) patch.category = String(fields.category);
+          if ("location" in fields) patch.location = String(fields.location);
+          if ("goal_amount_pkr" in fields) patch.goal_amount = Number(fields.goal_amount_pkr);
+          if ("status" in fields) patch.status = String(fields.status);
+          if ("ends_at" in fields) patch.ends_at = new Date(`${String(fields.ends_at)}T23:59:59Z`).toISOString();
+          const { error } = await db.from("campaigns").update(patch).eq("id", campaign.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, id: campaign.id, message: `Updated campaign "${campaign.title}".` });
+        }
+
+        case "donation": {
+          const { data: donationRows, error: dErr } = await db
+            .from("donations")
+            .select("id,campaign_id,amount")
+            .eq("id", identifier)
+            .limit(1);
+          if (dErr) return err(dErr.message);
+          const donation = donationRows?.[0];
+          if (!donation) return err(`Donation not found: "${identifier}". Use the donation id.`);
+          const patch: Record<string, unknown> = {};
+          if ("donor_name" in fields) patch.donor_name = String(fields.donor_name);
+          if ("method" in fields) patch.method = String(fields.method);
+          if ("message" in fields) patch.message = String(fields.message);
+          if ("is_anonymous" in fields) patch.is_anonymous = Boolean(fields.is_anonymous);
+          if ("amount_pkr" in fields) {
+            const newAmount = Number(fields.amount_pkr);
+            const delta = newAmount - Number(donation.amount);
+            patch.amount = newAmount;
+            const { data: campaignRow } = await db
+              .from("campaigns")
+              .select("raised_amount")
+              .eq("id", donation.campaign_id)
+              .single();
+            if (campaignRow) {
+              await db
+                .from("campaigns")
+                .update({ raised_amount: Number(campaignRow.raised_amount) + delta })
+                .eq("id", donation.campaign_id);
+            }
+          }
+          const { error } = await db.from("donations").update(patch).eq("id", donation.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, id: donation.id, message: `Updated donation ${donation.id}.` });
+        }
+
+        default:
+          return err(`Unknown entity: "${entity}". Must be one of student, trainer, course, campus, active_class, campaign, donation.`);
+      }
+    }
+
+    case "delete_record": {
+      const entity = argStr(args, "entity");
+      const identifier = argStr(args, "identifier");
+      if (!identifier) return err("identifier is required.");
+
+      switch (entity) {
+        case "student": {
+          const found = await findStudent(identifier);
+          if ("error" in found) return err(found.error);
+          const { error } = await db.from("students").delete().eq("id", found.row.id);
+          if (error) return err(error.message);
+          // Decrement denormalized counters — symmetric with create_student's increments.
+          const [{ data: campusRow }, { data: courseRow }, { data: trainerRow }] = await Promise.all([
+            db.from("campuses").select("student_count").eq("id", found.row.campus_id).single(),
+            db.from("courses").select("enrolled_count").eq("id", found.row.course_id).single(),
+            db.from("trainers").select("student_count").eq("id", found.row.trainer_id).single(),
+          ]);
+          await Promise.all([
+            campusRow &&
+              db
+                .from("campuses")
+                .update({ student_count: Math.max(0, Number(campusRow.student_count) - 1) })
+                .eq("id", found.row.campus_id),
+            courseRow &&
+              db
+                .from("courses")
+                .update({ enrolled_count: Math.max(0, Number(courseRow.enrolled_count) - 1) })
+                .eq("id", found.row.course_id),
+            trainerRow &&
+              db
+                .from("trainers")
+                .update({ student_count: Math.max(0, Number(trainerRow.student_count) - 1) })
+                .eq("id", found.row.trainer_id),
+          ]);
+          return JSON.stringify({ success: true, message: `Deleted student ${found.row.name}.` });
+        }
+
+        case "trainer": {
+          const t = matchByName(await getTrainers(), identifier);
+          if (!t) return err(`Trainer not found: "${identifier}".`);
+          const [{ count: studentDeps }, { count: courseDeps }, { count: classDeps }] = await Promise.all([
+            db.from("students").select("*", { count: "exact", head: true }).eq("trainer_id", t.id),
+            db.from("courses").select("*", { count: "exact", head: true }).eq("trainer_id", t.id),
+            db.from("active_classes").select("*", { count: "exact", head: true }).eq("trainer_id", t.id),
+          ]);
+          if ((studentDeps ?? 0) > 0 || (courseDeps ?? 0) > 0 || (classDeps ?? 0) > 0) {
+            return err(
+              `Can't delete ${t.name} — still linked to ${studentDeps ?? 0} students, ${courseDeps ?? 0} courses, and ${classDeps ?? 0} active classes. Reassign or delete those first.`,
+            );
+          }
+          const { error } = await db.from("trainers").delete().eq("id", t.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, message: `Deleted trainer ${t.name}.` });
+        }
+
+        case "course": {
+          const c = matchByName(await getCourses(), identifier);
+          if (!c) return err(`Course not found: "${identifier}".`);
+          const [{ count: studentDeps }, { count: classDeps }] = await Promise.all([
+            db.from("students").select("*", { count: "exact", head: true }).eq("course_id", c.id),
+            db.from("active_classes").select("*", { count: "exact", head: true }).eq("course_id", c.id),
+          ]);
+          if ((studentDeps ?? 0) > 0 || (classDeps ?? 0) > 0) {
+            return err(
+              `Can't delete "${c.name}" — still linked to ${studentDeps ?? 0} students and ${classDeps ?? 0} active classes. Reassign or delete those first.`,
+            );
+          }
+          const { error } = await db.from("courses").delete().eq("id", c.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, message: `Deleted course "${c.name}".` });
+        }
+
+        case "campus": {
+          const c = matchByName(await getCampuses(), identifier);
+          if (!c) return err(`Campus not found: "${identifier}".`);
+          const [{ count: studentDeps }, { count: trainerDeps }, { count: courseDeps }] = await Promise.all([
+            db.from("students").select("*", { count: "exact", head: true }).eq("campus_id", c.id),
+            db.from("trainers").select("*", { count: "exact", head: true }).eq("campus_id", c.id),
+            db.from("courses").select("*", { count: "exact", head: true }).eq("campus_id", c.id),
+          ]);
+          if ((studentDeps ?? 0) > 0 || (trainerDeps ?? 0) > 0 || (courseDeps ?? 0) > 0) {
+            return err(
+              `Can't delete "${c.name}" — still linked to ${studentDeps ?? 0} students, ${trainerDeps ?? 0} trainers, and ${courseDeps ?? 0} courses. Reassign or delete those first.`,
+            );
+          }
+          const { error } = await db.from("campuses").delete().eq("id", c.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, message: `Deleted campus "${c.name}".` });
+        }
+
+        case "active_class": {
+          const { classes } = await searchActiveClasses({ pageSize: 50, query: identifier });
+          const cls = matchByName(classes, identifier);
+          if (!cls) return err(`Active class not found: "${identifier}".`);
+          const { error } = await db.from("active_classes").delete().eq("id", cls.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, message: `Deleted class "${cls.name}".` });
+        }
+
+        case "campaign": {
+          const { data: campaignRows, error: cErr } = await db.from("campaigns").select("id,title");
+          if (cErr) return err(cErr.message);
+          const campaign = matchByName((campaignRows ?? []) as Array<{ id: string; title: string }>, identifier);
+          if (!campaign) return err(`Campaign not found: "${identifier}".`);
+          const { count: donationDeps } = await db
+            .from("donations")
+            .select("*", { count: "exact", head: true })
+            .eq("campaign_id", campaign.id);
+          if ((donationDeps ?? 0) > 0) {
+            return err(`Can't delete "${campaign.title}" — it has ${donationDeps} donations recorded against it. Remove those first.`);
+          }
+          const { error } = await db.from("campaigns").delete().eq("id", campaign.id);
+          if (error) return err(error.message);
+          return JSON.stringify({ success: true, message: `Deleted campaign "${campaign.title}".` });
+        }
+
+        case "donation": {
+          const { data: donationRows, error: dErr } = await db
+            .from("donations")
+            .select("id,campaign_id,amount")
+            .eq("id", identifier)
+            .limit(1);
+          if (dErr) return err(dErr.message);
+          const donation = donationRows?.[0];
+          if (!donation) return err(`Donation not found: "${identifier}". Use the donation id.`);
+          const { error } = await db.from("donations").delete().eq("id", donation.id);
+          if (error) return err(error.message);
+          const { data: campaignRow } = await db
+            .from("campaigns")
+            .select("raised_amount,donor_count")
+            .eq("id", donation.campaign_id)
+            .single();
+          if (campaignRow) {
+            await db
+              .from("campaigns")
+              .update({
+                raised_amount: Math.max(0, Number(campaignRow.raised_amount) - Number(donation.amount)),
+                donor_count: Math.max(0, Number(campaignRow.donor_count) - 1),
+              })
+              .eq("id", donation.campaign_id);
+          }
+          return JSON.stringify({ success: true, message: `Deleted donation ${donation.id} and adjusted campaign totals.` });
+        }
+
+        default:
+          return err(`Unknown entity: "${entity}". Must be one of student, trainer, course, campus, active_class, campaign, donation.`);
+      }
     }
 
     default:

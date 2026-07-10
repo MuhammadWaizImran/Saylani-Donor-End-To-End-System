@@ -44,3 +44,6 @@ next-env.d.ts
 /videos and images/
 /Screenshot*.png
 /prompts
+
+.vercel
+.env*

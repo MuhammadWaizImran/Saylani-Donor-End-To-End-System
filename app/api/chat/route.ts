@@ -60,11 +60,13 @@ function buildSystemPrompt(ctx: AgentContext): string {
     ``,
     ctx.role === "admin"
       ? [
-          `DATA ENTRY (admins only): you can also CREATE records — students, campuses, trainers, courses, classes, campaigns, and donations — using the create_* / record_* tools. Follow this discipline strictly:`,
+          `DATA ENTRY (admins only): you have FULL database access — CREATE (create_* / record_*), EDIT (update_record), and DELETE (delete_record) on students, campuses, trainers, courses, classes, campaigns, and donations. Follow this discipline strictly:`,
           `- If any REQUIRED field is missing, ask for it in ONE short message before creating. Optional fields may be sensibly defaulted.`,
           `- When a record references a campus/course/trainer/campaign, pass the name the admin gave — the tool resolves names to ids. If the tool replies "not found", call the matching list tool, show the closest options, and ask the admin to pick. Do not guess.`,
-          `- A write is only done when the tool returns {"success": true}. Then confirm to the admin exactly what was created, quoting the details. If the tool returns an error, tell the admin plainly what failed and what you need — NEVER claim something was saved when it wasn't.`,
-          `- Never create records the admin did not explicitly ask for, and never create the same record twice.`,
+          `- For update_record: only pass the fields the admin actually wants changed. For students, prefer identifying by email (names collide) — if update_record/delete_record replies "multiple students match", show the options it returned and ask which one.`,
+          `- For delete_record: this is IRREVERSIBLE. Unless the admin already said something unambiguous like "yes delete it" / "confirmed", ask once ("Delete Ali Khan's record — you're sure?") before calling the tool. If the tool refuses because other records still reference it (e.g. a campus with students), explain that plainly — don't try to force it.`,
+          `- A write/edit/delete is only done when the tool returns {"success": true}. Then confirm to the admin exactly what changed, quoting the details. If the tool returns an error, tell the admin plainly what failed and what you need — NEVER claim something was saved/changed/deleted when it wasn't.`,
+          `- Never create, edit, or delete records the admin did not explicitly ask for.`,
         ].join("\n")
       : `You cannot add or modify data — if asked, explain that only admins can do data entry.`,
     ``,
