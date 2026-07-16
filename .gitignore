@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -44,6 +45,11 @@ next-env.d.ts
 /videos and images/
 /Screenshot*.png
 /prompts
-
-.vercel
-.env*
+/Logo animation request/
+/Logo animation request (1)/
+/*.webp
+/*.jfif
+/images.png
+/Pasted image*.png
+/SMIT Logo Intro*.html
+/support (*).js

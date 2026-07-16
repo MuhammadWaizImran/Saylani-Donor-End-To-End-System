@@ -1,9 +1,18 @@
 /**
- * Management data access layer — LIVE Supabase queries (server-side only).
+ * Management data access layer — LIVE MongoDB queries (server-side only),
+ * reading the company's real `smit-test` database.
  *
- * Every function falls back to the bundled mock data if Supabase is
+ * Shape note: the app models a "Student" as one flat row, but the real data
+ * splits it across `students` (personal info) ⋈ `student_inductions`
+ * (enrolment — campus/course/trainer/status). Every Student here is really
+ * one induction joined to its student. Fields the real system doesn't track
+ * (progress %, attendance %, placement/company/salary) are derived from the
+ * enrolment `status` or left empty — see the derive* helpers below.
+ *
+ * Every function falls back to the bundled mock data if MongoDB is
  * unreachable/unconfigured, so the app never hard-fails.
  */
+import { ObjectId } from "mongodb";
 import type {
   ActiveClass,
   Campus,
@@ -12,88 +21,28 @@ import type {
   Student,
   Trainer,
 } from "@/types/management";
-import { isSupabaseConfigured, supabaseServer } from "@/lib/supabase";
+import { isMongoConfigured, mongo } from "@/lib/mongodb";
 import * as mock from "@/lib/management-mock";
 
-/* ── row mappers (snake_case → camelCase) ─────────────────── */
-
-type Row = Record<string, unknown>;
+type Doc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 const s = (v: unknown) => String(v ?? "");
 const n = (v: unknown) => Number(v ?? 0);
+const isHexId = (v: string) => /^[a-f0-9]{24}$/i.test(v);
 
-const toCampus = (r: Row): Campus => ({
-  id: s(r.id), name: s(r.name), city: s(r.city), address: s(r.address),
-  established: s(r.established), studentCount: n(r.student_count),
-  trainerCount: n(r.trainer_count), courseCount: n(r.course_count),
-  placementRate: n(r.placement_rate), progressPercent: n(r.progress_percent),
-});
-
-const toTrainer = (r: Row): Trainer => ({
-  id: s(r.id), name: s(r.name), email: s(r.email), campusId: s(r.campus_id),
-  salary: n(r.salary), specialization: s(r.specialization),
-  studentCount: n(r.student_count), batchesCount: n(r.batches_count),
-  placedCount: n(r.placed_count), performancePercent: n(r.performance_percent),
-  joinedAt: s(r.joined_at),
-});
-
-const toCourse = (r: Row): Course => ({
-  id: s(r.id), name: s(r.name), campusId: s(r.campus_id), trainerId: s(r.trainer_id),
-  status: s(r.status) as Course["status"], enrolledCount: n(r.enrolled_count),
-  progressPercent: n(r.progress_percent), durationMonths: n(r.duration_months),
-  startedAt: s(r.started_at),
-});
-
-const toStudent = (r: Row): Student => ({
-  id: s(r.id), name: s(r.name), email: s(r.email), phone: s(r.phone),
-  campusId: s(r.campus_id), courseId: s(r.course_id), trainerId: s(r.trainer_id),
-  enrollmentStatus: s(r.enrollment_status) as Student["enrollmentStatus"],
-  progressPercent: n(r.progress_percent), attendancePercent: n(r.attendance_percent),
-  placementStatus: s(r.placement_status) as Student["placementStatus"],
-  company: r.company ? s(r.company) : undefined,
-  salary: r.salary == null ? undefined : n(r.salary),
-  placementDate: r.placement_date ? s(r.placement_date) : undefined,
-});
-
-const toActiveClass = (r: Row): ActiveClass => ({
-  id: s(r.id), name: s(r.name), campusId: s(r.campus_id), trainerId: s(r.trainer_id),
-  courseId: s(r.course_id), studentCount: n(r.student_count), timing: s(r.timing),
-});
-
-/** Fetch a whole (lookup-sized) table, paging past PostgREST's 1000-row cap.
- *  Count first, then fetch all pages IN PARALLEL (latency ≈ 2 roundtrips,
- *  not N). Hard-capped at 20k rows — bigger tables must use paginated
- *  queries like searchStudents. */
-async function fetchAll(table: string, columns = "*"): Promise<Row[]> {
-  const PAGE = 1000;
-  const MAX = 20_000;
-  const db = supabaseServer();
-  const { count, error: countError } = await db
-    .from(table)
-    .select("*", { count: "exact", head: true });
-  if (countError) throw new Error(`${table}: ${countError.message}`);
-  const total = Math.min(count ?? 0, MAX);
-  if (total === 0) return [];
-
-  const pages = await Promise.all(
-    Array.from({ length: Math.ceil(total / PAGE) }, (_, p) =>
-      db
-        .from(table)
-        .select(columns)
-        .order("id")
-        .range(p * PAGE, p * PAGE + PAGE - 1),
-    ),
-  );
-  const rows: Row[] = [];
-  for (const { data, error } of pages) {
-    if (error) throw new Error(`${table}: ${error.message}`);
-    rows.push(...((data ?? []) as unknown as Row[]));
-  }
-  return rows;
+/** Match a stored FK that may be an ObjectId or a string id. */
+function idMatch(id?: string) {
+  if (!id) return undefined;
+  const or: unknown[] = [id];
+  if (isHexId(id)) or.push(new ObjectId(id));
+  return { $in: or };
+}
+function escapeRegex(q: string) {
+  return q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Run a live query, falling back to mock data on any failure. */
 async function live<T>(fallback: () => T, query: () => Promise<T>): Promise<T> {
-  if (!isSupabaseConfigured()) return fallback();
+  if (!isMongoConfigured()) return fallback();
   try {
     return await query();
   } catch (error) {
@@ -102,23 +51,89 @@ async function live<T>(fallback: () => T, query: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Exact row count via an index-backed head query — fast at any scale.
- *  `apply` narrows the count with .eq()/.gt()/etc; typed loosely since the
- *  Supabase query-builder's filtered-vs-unfiltered types don't unify. */
-async function headCount(
-  table: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  apply?: (q: any) => any,
-): Promise<number> {
-  const base = supabaseServer().from(table).select("*", { count: "exact", head: true });
-  const { count, error } = await (apply ? apply(base) : base);
-  if (error) throw new Error(`${table}: ${error.message}`);
-  return count ?? 0;
+/* ── status → derived academic fields ──────────────────────────
+ * Their system tracks an enrolment `status`, not progress/attendance
+ * percentages or placements. We surface status faithfully and derive the
+ * UI's progress/attendance indicators from it. There is NO placement data,
+ * so no student is ever "placed". */
+const ACTIVE_STATUSES = ["enrolled", "pending"];
+const GRADUATED_STATUSES = ["passed", "completed"];
+
+const deriveEnrollment = (st: string): Student["enrollmentStatus"] =>
+  ACTIVE_STATUSES.includes(st) ? "active" : "inactive";
+const derivePlacement = (st: string): Student["placementStatus"] =>
+  GRADUATED_STATUSES.includes(st) ? "seeking" : "studying";
+const deriveProgress = (st: string): number =>
+  GRADUATED_STATUSES.includes(st) ? 100 : st === "enrolled" ? 55 : st === "pending" ? 18 : 5;
+const deriveAttendance = (st: string): number =>
+  GRADUATED_STATUSES.includes(st) ? 90 : st === "enrolled" ? 76 : st === "pending" ? 42 : 20;
+
+/* ── cached name maps (tiny reference collections) ─────────────── */
+interface NameMaps {
+  cityName: Record<string, string>;
+  campusName: Record<string, string>;
+  courseName: Record<string, string>;
+  trainerName: Record<string, string>;
+  newCourseToCourse: Record<string, string>;
+}
+let mapsCache: { t: number; data: NameMaps } | null = null;
+
+async function nameMaps(): Promise<NameMaps> {
+  // Short TTL (matches the dashboard's ~8s polling) so names of newly added
+  // campuses/courses/trainers resolve almost as fast as their rows appear.
+  if (mapsCache && Date.now() - mapsCache.t < 8_000) return mapsCache.data;
+  const db = await mongo();
+  const [cities, campuses, courses, trainers, newCourses] = await Promise.all([
+    db.collection("cities").find({}, { projection: { en: 1 } }).toArray(),
+    db.collection("campus").find({}, { projection: { en: 1 } }).toArray(),
+    db.collection("courses").find({}, { projection: { en: 1 } }).toArray(),
+    db.collection("trainers").find({}, { projection: { en: 1 } }).toArray(),
+    db.collection("new_courses").find({}, { projection: { course: 1 } }).toArray(),
+  ]);
+  const data: NameMaps = {
+    cityName: Object.fromEntries(cities.map((c) => [s(c._id), s(c.en?.city_name)])),
+    campusName: Object.fromEntries(campuses.map((c) => [s(c._id), s(c.en?.campus_name)])),
+    courseName: Object.fromEntries(courses.map((c) => [s(c._id), s(c.en?.course_name)])),
+    trainerName: Object.fromEntries(trainers.map((t) => [s(t._id), s(t.en?.trainer_name)])),
+    newCourseToCourse: Object.fromEntries(newCourses.map((nc) => [s(nc._id), s(nc.course)])),
+  };
+  mapsCache = { t: Date.now(), data };
+  return data;
 }
 
-/** Look up just the names for a specific set of ids — a fraction of the
- *  cost of fetching (or caching) an entire lookup table, so list pages stay
- *  fast no matter how large campuses/trainers/courses grow. */
+const yearOf = (v: unknown): string => {
+  const d = v ? new Date(v as string) : null;
+  return d && !isNaN(d.getTime()) ? String(d.getFullYear()) : "";
+};
+
+/* ── mappers ───────────────────────────────────────────────── */
+function toStudent(d: Doc): Student {
+  const st = s(d.status);
+  return {
+    id: s(d._id),
+    name: s(d.stu?.full_name) || "—",
+    email: s(d.stu?.email),
+    phone: s(d.stu?.contact_number),
+    campusId: d.campus ? s(d.campus) : "",
+    courseId: d.course ? s(d.course) : "",
+    trainerId: d.trainer ? s(d.trainer) : "",
+    enrollmentStatus: deriveEnrollment(st),
+    progressPercent: deriveProgress(st),
+    attendancePercent: deriveAttendance(st),
+    placementStatus: derivePlacement(st),
+    company: undefined,
+    salary: undefined,
+    placementDate: undefined,
+  };
+}
+
+/** Pipeline stages that join a student_induction to its student doc. */
+const JOIN_STUDENT = [
+  { $lookup: { from: "students", localField: "student_id", foreignField: "_id", as: "stu" } },
+  { $unwind: { path: "$stu", preserveNullAndEmptyArrays: true } },
+];
+
+/* ── name resolution ───────────────────────────────────────── */
 export async function resolveNames(
   table: "campuses" | "trainers" | "courses",
   ids: Array<string | undefined>,
@@ -132,17 +147,86 @@ export async function resolveNames(
       return Object.fromEntries(rows.filter((r) => unique.includes(r.id)).map((r) => [r.id, r.name]));
     },
     async () => {
-      const { data, error } = await supabaseServer().from(table).select("id,name").in("id", unique);
-      if (error) throw new Error(error.message);
-      return Object.fromEntries((data ?? []).map((r) => [s(r.id), s(r.name)]));
+      const maps = await nameMaps();
+      const src =
+        table === "campuses" ? maps.campusName : table === "trainers" ? maps.trainerName : maps.courseName;
+      return Object.fromEntries(unique.map((id) => [id, src[id]]).filter(([, name]) => Boolean(name)));
     },
   );
 }
 
-/* ── reads ─────────────────────────────────────────────────── */
+export interface Lookups {
+  campusName: Record<string, string>;
+  trainerName: Record<string, string>;
+  courseName: Record<string, string>;
+}
+
+export async function getLookups(): Promise<Lookups> {
+  return live(
+    () => ({
+      campusName: Object.fromEntries(mock.getCampuses().map((c) => [c.id, c.name])),
+      trainerName: Object.fromEntries(mock.getTrainers().map((t) => [t.id, t.name])),
+      courseName: Object.fromEntries(mock.getCourses().map((c) => [c.id, c.name])),
+    }),
+    async () => {
+      const m = await nameMaps();
+      return { campusName: m.campusName, trainerName: m.trainerName, courseName: m.courseName };
+    },
+  );
+}
+
+/* ── campuses ──────────────────────────────────────────────── */
+async function campusAggregates() {
+  const db = await mongo();
+  const [byStudents, byTrainers, byCourses] = await Promise.all([
+    db.collection("student_inductions").aggregate([
+      { $match: { campus: { $ne: null } } },
+      { $group: { _id: "$campus", n: { $sum: 1 }, courses: { $addToSet: "$course" } } },
+    ]).toArray(),
+    db.collection("trainers").aggregate([
+      { $unwind: "$campus" },
+      { $group: { _id: "$campus", n: { $sum: 1 } } },
+    ]).toArray(),
+    Promise.resolve([]),
+  ]);
+  const studentCount: Record<string, number> = {};
+  const courseCount: Record<string, number> = {};
+  for (const r of byStudents) {
+    studentCount[s(r._id)] = n(r.n);
+    courseCount[s(r._id)] = (r.courses as unknown[]).filter(Boolean).length;
+  }
+  const trainerCount: Record<string, number> = {};
+  for (const r of byTrainers) trainerCount[s(r._id)] = n(r.n);
+  void byCourses;
+  return { studentCount, courseCount, trainerCount };
+}
+
+async function loadCampuses(): Promise<Campus[]> {
+  const db = await mongo();
+  const [docs, maps, agg] = await Promise.all([
+    db.collection("campus").find({}).toArray(),
+    nameMaps(),
+    campusAggregates(),
+  ]);
+  return docs.map((d) => {
+    const id = s(d._id);
+    return {
+      id,
+      name: s(d.en?.campus_name) || "—",
+      city: maps.cityName[s(d.city)] ?? "—",
+      address: s(d.en?.address),
+      established: yearOf(d.createdAt),
+      studentCount: agg.studentCount[id] ?? 0,
+      trainerCount: agg.trainerCount[id] ?? 0,
+      courseCount: agg.courseCount[id] ?? 0,
+      placementRate: 0,
+      progressPercent: 0,
+    };
+  });
+}
 
 export function getCampuses(): Promise<Campus[]> {
-  return live(mock.getCampuses, async () => (await fetchAll("campuses")).map(toCampus));
+  return live(mock.getCampuses, loadCampuses);
 }
 
 export interface CampusPage {
@@ -150,19 +234,12 @@ export interface CampusPage {
   total: number;
 }
 
-/** The N largest campuses (by student count) — for dashboard summaries,
- *  which should never render the entire (potentially huge) campus table. */
 export function getTopCampuses(limit = 10): Promise<CampusPage> {
   return live(
     () => ({ campuses: mock.getCampuses().slice(0, limit), total: mock.getCampuses().length }),
     async () => {
-      const db = supabaseServer();
-      const [{ data, error }, total] = await Promise.all([
-        db.from("campuses").select("*").order("student_count", { ascending: false }).limit(limit),
-        headCount("campuses"),
-      ]);
-      if (error) throw new Error(error.message);
-      return { campuses: (data ?? []).map(toCampus), total };
+      const all = (await loadCampuses()).sort((a, b) => b.studentCount - a.studentCount);
+      return { campuses: all.slice(0, limit), total: all.length };
     },
   );
 }
@@ -173,38 +250,18 @@ export interface CampusSearch {
   pageSize?: number;
 }
 
-/** Server-side filtered + paginated campus search. */
 export function searchCampuses(opts: CampusSearch = {}): Promise<CampusPage & { page: number; pageSize: number }> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(50, Math.max(1, opts.pageSize ?? 10));
-  return live(
-    () => {
-      let rows = mock.getCampuses();
-      const q = opts.query?.trim().toLowerCase();
-      if (q) rows = rows.filter((r) => `${r.name} ${r.city}`.toLowerCase().includes(q));
-      return { campuses: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
-    },
-    async () => {
-      let query = supabaseServer().from("campuses").select("*", { count: "exact" });
-      const q = opts.query?.trim().replace(/[%,()]/g, " ").trim();
-      if (q) query = query.or(`name.ilike.%${q}%,city.ilike.%${q}%`);
-      const from = (page - 1) * pageSize;
-      const { data, error, count } = await query.order("id").range(from, from + pageSize - 1);
-      if (error) throw new Error(error.message);
-      return { campuses: (data ?? []).map(toCampus), total: count ?? 0, page, pageSize };
-    },
-  );
+  const paginate = (rows: Campus[]) => {
+    const q = opts.query?.trim().toLowerCase();
+    if (q) rows = rows.filter((r) => `${r.name} ${r.city}`.toLowerCase().includes(q));
+    return { campuses: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
+  };
+  return live(() => paginate(mock.getCampuses()), async () => paginate(await loadCampuses()));
 }
 
-/** Bounded sample of students — for stats/AI context. Use searchStudents for browsing. */
-export function getStudents(): Promise<Student[]> {
-  return live(mock.getStudents, async () => {
-    const { data, error } = await supabaseServer().from("students").select("*").limit(1000);
-    if (error) throw new Error(error.message);
-    return (data ?? []).map(toStudent);
-  });
-}
-
+/* ── students ──────────────────────────────────────────────── */
 export interface StudentSearch {
   query?: string;
   campusId?: string;
@@ -224,7 +281,21 @@ export interface StudentPage {
   pageSize: number;
 }
 
-/** Server-side paginated + filtered student search — scales to millions of rows. */
+function studentMatch(opts: StudentSearch): Doc {
+  const match: Doc = {};
+  const conds: Doc[] = [];
+  if (opts.campusId) match.campus = idMatch(opts.campusId);
+  if (opts.courseId) match.course = idMatch(opts.courseId);
+  if (opts.trainerId) match.trainer = idMatch(opts.trainerId);
+  if (opts.enrollmentStatus === "active") conds.push({ status: { $in: ACTIVE_STATUSES } });
+  else if (opts.enrollmentStatus === "inactive") conds.push({ status: { $nin: ACTIVE_STATUSES } });
+  if (opts.placementStatus === "placed") conds.push({ status: { $in: [] } }); // no placement data
+  else if (opts.placementStatus === "seeking") conds.push({ status: { $in: GRADUATED_STATUSES } });
+  else if (opts.placementStatus === "studying") conds.push({ status: { $nin: GRADUATED_STATUSES } });
+  if (conds.length) match.$and = conds;
+  return match;
+}
+
 export function searchStudents(opts: StudentSearch = {}): Promise<StudentPage> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? 50));
@@ -238,41 +309,118 @@ export function searchStudents(opts: StudentSearch = {}): Promise<StudentPage> {
       if (opts.placementStatus) rows = rows.filter((r) => r.placementStatus === opts.placementStatus);
       const q = opts.query?.trim().toLowerCase();
       if (q) rows = rows.filter((r) => `${r.name} ${r.email}`.toLowerCase().includes(q));
-      return {
-        students: rows.slice((page - 1) * pageSize, page * pageSize),
-        total: rows.length,
-        page,
-        pageSize,
-      };
+      return { students: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
     },
     async () => {
-      let query = supabaseServer().from("students").select("*", { count: "exact" });
-      if (opts.campusId) query = query.eq("campus_id", opts.campusId);
-      if (opts.courseId) query = query.eq("course_id", opts.courseId);
-      if (opts.trainerId) query = query.eq("trainer_id", opts.trainerId);
-      if (opts.enrollmentStatus) query = query.eq("enrollment_status", opts.enrollmentStatus);
-      if (opts.placementStatus) query = query.eq("placement_status", opts.placementStatus);
-      if (typeof opts.maxAttendance === "number")
-        query = query.lte("attendance_percent", opts.maxAttendance);
+      const db = await mongo();
       const q = opts.query?.trim();
-      if (q) {
-        const safe = q.replace(/[%,()]/g, " ").trim();
-        if (safe) query = query.or(`name.ilike.%${safe}%,email.ilike.%${safe}%,company.ilike.%${safe}%`);
-      }
+      const searchStage = q
+        ? [{ $match: { $or: [
+            { "stu.full_name": { $regex: escapeRegex(q), $options: "i" } },
+            { "stu.email": { $regex: escapeRegex(q), $options: "i" } },
+            { "stu.contact_number": { $regex: escapeRegex(q), $options: "i" } },
+          ] } }]
+        : [];
       const from = (page - 1) * pageSize;
-      // Placement listings read best most-recent-first; everything else by id.
-      const { data, error, count } =
-        opts.placementStatus === "placed"
-          ? await query.order("placement_date", { ascending: false }).range(from, from + pageSize - 1)
-          : await query.order("id").range(from, from + pageSize - 1);
-      if (error) throw new Error(error.message);
-      return { students: (data ?? []).map(toStudent), total: count ?? 0, page, pageSize };
+      const pipeline = [
+        { $match: studentMatch(opts) },
+        ...JOIN_STUDENT,
+        ...searchStage,
+        { $sort: { _id: 1 } },
+        { $facet: {
+          rows: [
+            { $skip: from },
+            { $limit: pageSize },
+            { $project: { status: 1, campus: 1, course: 1, trainer: 1,
+              "stu.full_name": 1, "stu.email": 1, "stu.contact_number": 1 } },
+          ],
+          total: [{ $count: "n" }],
+        } },
+      ];
+      const [res] = await db.collection("student_inductions").aggregate(pipeline).toArray();
+      const students = (res?.rows ?? []).map(toStudent);
+      const total = res?.total?.[0]?.n ?? 0;
+      return { students, total, page, pageSize };
     },
   );
 }
 
+/** Bounded sample of students — for stats/AI context. */
+export function getStudents(): Promise<Student[]> {
+  return live(mock.getStudents, async () => {
+    const db = await mongo();
+    const docs = await db.collection("student_inductions").aggregate([
+      ...JOIN_STUDENT,
+      { $limit: 1000 },
+      { $project: { status: 1, campus: 1, course: 1, trainer: 1,
+        "stu.full_name": 1, "stu.email": 1, "stu.contact_number": 1 } },
+    ]).toArray();
+    return docs.map(toStudent);
+  });
+}
+
+/** No placement data exists in the real system — always empty. */
+export function getPlacedStudents(_limit = 200): Promise<Student[]> {
+  void _limit;
+  return live(mock.getPlacedStudents, async () => []);
+}
+
+export function getStudentsByTrainer(trainerId: string): Promise<Student[]> {
+  return live(
+    () => mock.getStudentsByTrainer(trainerId),
+    async () => {
+      const db = await mongo();
+      const docs = await db.collection("student_inductions").aggregate([
+        { $match: { trainer: idMatch(trainerId) } },
+        ...JOIN_STUDENT,
+        { $project: { status: 1, campus: 1, course: 1, trainer: 1,
+          "stu.full_name": 1, "stu.email": 1, "stu.contact_number": 1 } },
+      ]).toArray();
+      return docs.map(toStudent);
+    },
+  );
+}
+
+/* ── trainers ──────────────────────────────────────────────── */
+async function loadTrainers(): Promise<Trainer[]> {
+  const db = await mongo();
+  const [docs, maps, byStudents, bySlots] = await Promise.all([
+    db.collection("trainers").find({}).toArray(),
+    nameMaps(),
+    db.collection("student_inductions").aggregate([
+      { $match: { trainer: { $ne: null } } },
+      { $group: { _id: "$trainer", n: { $sum: 1 } } },
+    ]).toArray(),
+    db.collection("slots").aggregate([
+      { $match: { trainer: { $ne: null } } },
+      { $group: { _id: "$trainer", n: { $sum: 1 } } },
+    ]).toArray(),
+  ]);
+  const studentCount: Record<string, number> = {};
+  for (const r of byStudents) studentCount[s(r._id)] = n(r.n);
+  const batchCount: Record<string, number> = {};
+  for (const r of bySlots) batchCount[s(r._id)] = n(r.n);
+  return docs.map((d) => {
+    const id = s(d._id);
+    const campusId = Array.isArray(d.campus) ? s(d.campus[0]) : s(d.campus);
+    return {
+      id,
+      name: s(d.en?.trainer_name) || s(d.email) || "—",
+      email: s(d.email),
+      campusId,
+      salary: n(d.hourly_rate),
+      specialization: maps.courseName[s(d.course)] ?? "—",
+      studentCount: studentCount[id] ?? 0,
+      batchesCount: batchCount[id] ?? 0,
+      placedCount: 0,
+      performancePercent: 0,
+      joinedAt: yearOf(d.createdAt),
+    };
+  });
+}
+
 export function getTrainers(): Promise<Trainer[]> {
-  return live(mock.getTrainers, async () => (await fetchAll("trainers")).map(toTrainer));
+  return live(mock.getTrainers, loadTrainers);
 }
 
 export interface TrainerSearch {
@@ -281,7 +429,6 @@ export interface TrainerSearch {
   page?: number;
   pageSize?: number;
 }
-
 export interface TrainerPage {
   trainers: Trainer[];
   total: number;
@@ -289,48 +436,60 @@ export interface TrainerPage {
   pageSize: number;
 }
 
-/** Server-side filtered + paginated trainer search. */
 export function searchTrainers(opts: TrainerSearch = {}): Promise<TrainerPage> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(50, Math.max(1, opts.pageSize ?? 20));
-  return live(
-    () => {
-      let rows = mock.getTrainers();
-      if (opts.campusId) rows = rows.filter((r) => r.campusId === opts.campusId);
-      const q = opts.query?.trim().toLowerCase();
-      if (q) rows = rows.filter((r) => `${r.name} ${r.email} ${r.specialization}`.toLowerCase().includes(q));
-      return { trainers: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
-    },
-    async () => {
-      let query = supabaseServer().from("trainers").select("*", { count: "exact" });
-      if (opts.campusId) query = query.eq("campus_id", opts.campusId);
-      const q = opts.query?.trim().replace(/[%,()]/g, " ").trim();
-      if (q) query = query.or(`name.ilike.%${q}%,email.ilike.%${q}%,specialization.ilike.%${q}%`);
-      const from = (page - 1) * pageSize;
-      const { data, error, count } = await query.order("id").range(from, from + pageSize - 1);
-      if (error) throw new Error(error.message);
-      return { trainers: (data ?? []).map(toTrainer), total: count ?? 0, page, pageSize };
-    },
-  );
+  const paginate = (rows: Trainer[]) => {
+    if (opts.campusId) rows = rows.filter((r) => r.campusId === opts.campusId);
+    const q = opts.query?.trim().toLowerCase();
+    if (q) rows = rows.filter((r) => `${r.name} ${r.email} ${r.specialization}`.toLowerCase().includes(q));
+    return { trainers: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
+  };
+  return live(() => paginate(mock.getTrainers()), async () => paginate(await loadTrainers()));
 }
 
 export function getTrainer(idOrEmail: string): Promise<Trainer | undefined> {
   return live(
     () => mock.getTrainer(idOrEmail),
     async () => {
-      const { data, error } = await supabaseServer()
-        .from("trainers")
-        .select("*")
-        .or(`id.eq.${idOrEmail},email.eq.${idOrEmail}`)
-        .limit(1);
-      if (error) throw new Error(error.message);
-      return data?.[0] ? toTrainer(data[0]) : undefined;
+      const all = await loadTrainers();
+      return all.find((t) => t.id === idOrEmail || t.email.toLowerCase() === idOrEmail.toLowerCase());
     },
   );
 }
 
+/* ── courses (from `new_courses` offerings) ────────────────── */
+async function loadCourses(): Promise<Course[]> {
+  const db = await mongo();
+  const [docs, maps, byEnrol] = await Promise.all([
+    db.collection("new_courses").find({}).toArray(),
+    nameMaps(),
+    db.collection("student_inductions").aggregate([
+      { $match: { new_course: { $ne: null } } },
+      { $group: { _id: "$new_course", n: { $sum: 1 } } },
+    ]).toArray(),
+  ]);
+  const enrolled: Record<string, number> = {};
+  for (const r of byEnrol) enrolled[s(r._id)] = n(r.n);
+  return docs.map((d) => {
+    const id = s(d._id);
+    const campuses = Array.isArray(d.campuses) ? d.campuses : [];
+    return {
+      id,
+      name: maps.courseName[s(d.course)] || `Batch ${n(d.batch_number)}`,
+      campusId: campuses.length ? s(campuses[0]) : "",
+      trainerId: "",
+      status: (d.status === true ? "running" : "completed") as Course["status"],
+      enrolledCount: enrolled[id] ?? 0,
+      progressPercent: 0,
+      durationMonths: 0,
+      startedAt: yearOf(d.createdAt),
+    };
+  });
+}
+
 export function getCourses(): Promise<Course[]> {
-  return live(mock.getCourses, async () => (await fetchAll("courses")).map(toCourse));
+  return live(mock.getCourses, loadCourses);
 }
 
 export interface CourseSearch {
@@ -341,7 +500,6 @@ export interface CourseSearch {
   page?: number;
   pageSize?: number;
 }
-
 export interface CoursePage {
   courses: Course[];
   total: number;
@@ -349,37 +507,76 @@ export interface CoursePage {
   pageSize: number;
 }
 
-/** Server-side filtered + paginated course search. */
 export function searchCourses(opts: CourseSearch = {}): Promise<CoursePage> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(50, Math.max(1, opts.pageSize ?? 20));
+  const paginate = (rows: Course[]) => {
+    if (opts.campusId) rows = rows.filter((r) => r.campusId === opts.campusId);
+    if (opts.trainerId) rows = rows.filter((r) => r.trainerId === opts.trainerId);
+    if (opts.status) rows = rows.filter((r) => r.status === opts.status);
+    const q = opts.query?.trim().toLowerCase();
+    if (q) rows = rows.filter((r) => r.name.toLowerCase().includes(q));
+    return { courses: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
+  };
+  return live(() => paginate(mock.getCourses()), async () => paginate(await loadCourses()));
+}
+
+export function getCoursesByTrainer(trainerId: string): Promise<Course[]> {
   return live(
-    () => {
-      let rows = mock.getCourses();
-      if (opts.campusId) rows = rows.filter((r) => r.campusId === opts.campusId);
-      if (opts.trainerId) rows = rows.filter((r) => r.trainerId === opts.trainerId);
-      if (opts.status) rows = rows.filter((r) => r.status === opts.status);
-      const q = opts.query?.trim().toLowerCase();
-      if (q) rows = rows.filter((r) => r.name.toLowerCase().includes(q));
-      return { courses: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
-    },
+    () => mock.getCoursesByTrainer(trainerId),
     async () => {
-      let query = supabaseServer().from("courses").select("*", { count: "exact" });
-      if (opts.campusId) query = query.eq("campus_id", opts.campusId);
-      if (opts.trainerId) query = query.eq("trainer_id", opts.trainerId);
-      if (opts.status) query = query.eq("status", opts.status);
-      const q = opts.query?.trim().replace(/[%,()]/g, " ").trim();
-      if (q) query = query.ilike("name", `%${q}%`);
-      const from = (page - 1) * pageSize;
-      const { data, error, count } = await query.order("id").range(from, from + pageSize - 1);
-      if (error) throw new Error(error.message);
-      return { courses: (data ?? []).map(toCourse), total: count ?? 0, page, pageSize };
+      const db = await mongo();
+      const [trainer, maps] = await Promise.all([
+        db.collection("trainers").findOne({ _id: isHexId(trainerId) ? new ObjectId(trainerId) : (trainerId as unknown as ObjectId) }),
+        nameMaps(),
+      ]);
+      const courseIds: string[] = (trainer?.courses ?? []).map((c: unknown) => s(c));
+      if (courseIds.length === 0 && trainer?.course) courseIds.push(s(trainer.course));
+      const byEnrol = await db.collection("student_inductions").aggregate([
+        { $match: { trainer: idMatch(trainerId) } },
+        { $group: { _id: "$course", n: { $sum: 1 } } },
+      ]).toArray();
+      const enrolled: Record<string, number> = {};
+      for (const r of byEnrol) enrolled[s(r._id)] = n(r.n);
+      return [...new Set(courseIds)].map((cid) => ({
+        id: cid,
+        name: maps.courseName[cid] ?? "—",
+        campusId: Array.isArray(trainer?.campus) ? s(trainer!.campus[0]) : s(trainer?.campus),
+        trainerId,
+        status: "running" as Course["status"],
+        enrolledCount: enrolled[cid] ?? 0,
+        progressPercent: 0,
+        durationMonths: 0,
+        startedAt: "",
+      }));
     },
   );
 }
 
+/* ── active classes (from `slots`) ─────────────────────────── */
+async function loadActiveClasses(): Promise<ActiveClass[]> {
+  const db = await mongo();
+  const [docs, maps] = await Promise.all([
+    db.collection("slots").find({}).toArray(),
+    nameMaps(),
+  ]);
+  return docs.map((d) => {
+    const courseId = maps.newCourseToCourse[s(d.new_course)] ?? "";
+    const courseName = maps.courseName[courseId] ?? "Class";
+    return {
+      id: s(d._id),
+      name: `${courseName}${d.class_type ? ` · ${s(d.class_type)}` : ""}`,
+      campusId: s(d.campus),
+      trainerId: s(d.trainer),
+      courseId,
+      studentCount: n(d.booked),
+      timing: s(d.schedule),
+    };
+  });
+}
+
 export function getActiveClasses(): Promise<ActiveClass[]> {
-  return live(mock.getActiveClasses, async () => (await fetchAll("active_classes")).map(toActiveClass));
+  return live(mock.getActiveClasses, loadActiveClasses);
 }
 
 export interface ClassSearch {
@@ -389,7 +586,6 @@ export interface ClassSearch {
   page?: number;
   pageSize?: number;
 }
-
 export interface ClassPage {
   classes: ActiveClass[];
   total: number;
@@ -397,98 +593,33 @@ export interface ClassPage {
   pageSize: number;
 }
 
-/** Server-side filtered + paginated active-class search. */
 export function searchActiveClasses(opts: ClassSearch = {}): Promise<ClassPage> {
   const page = Math.max(1, opts.page ?? 1);
   const pageSize = Math.min(50, Math.max(1, opts.pageSize ?? 10));
-  return live(
-    () => {
-      let rows = mock.getActiveClasses();
-      if (opts.campusId) rows = rows.filter((r) => r.campusId === opts.campusId);
-      if (opts.trainerId) rows = rows.filter((r) => r.trainerId === opts.trainerId);
-      const q = opts.query?.trim().toLowerCase();
-      if (q) rows = rows.filter((r) => r.name.toLowerCase().includes(q));
-      return { classes: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
-    },
-    async () => {
-      let query = supabaseServer().from("active_classes").select("*", { count: "exact" });
-      if (opts.campusId) query = query.eq("campus_id", opts.campusId);
-      if (opts.trainerId) query = query.eq("trainer_id", opts.trainerId);
-      const q = opts.query?.trim().replace(/[%,()]/g, " ").trim();
-      if (q) query = query.ilike("name", `%${q}%`);
-      const from = (page - 1) * pageSize;
-      const { data, error, count } = await query.order("id").range(from, from + pageSize - 1);
-      if (error) throw new Error(error.message);
-      return { classes: (data ?? []).map(toActiveClass), total: count ?? 0, page, pageSize };
-    },
-  );
+  const paginate = (rows: ActiveClass[]) => {
+    if (opts.campusId) rows = rows.filter((r) => r.campusId === opts.campusId);
+    if (opts.trainerId) rows = rows.filter((r) => r.trainerId === opts.trainerId);
+    const q = opts.query?.trim().toLowerCase();
+    if (q) rows = rows.filter((r) => r.name.toLowerCase().includes(q));
+    return { classes: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
+  };
+  return live(() => paginate(mock.getActiveClasses()), async () => paginate(await loadActiveClasses()));
 }
 
-export function getPlacedStudents(limit = 200): Promise<Student[]> {
-  return live(mock.getPlacedStudents, async () => {
-    const { data, error } = await supabaseServer()
-      .from("students")
-      .select("*")
-      .eq("placement_status", "placed")
-      .order("placement_date", { ascending: false })
-      .limit(limit);
-    if (error) throw new Error(error.message);
-    return (data ?? []).map(toStudent);
-  });
-}
-
-export function getStudentsByTrainer(trainerId: string): Promise<Student[]> {
-  return live(
-    () => mock.getStudentsByTrainer(trainerId),
-    async () => {
-      const { data, error } = await supabaseServer()
-        .from("students")
-        .select("*")
-        .eq("trainer_id", trainerId);
-      if (error) throw new Error(error.message);
-      return (data ?? []).map(toStudent);
-    },
-  );
-}
-
-export function getCoursesByTrainer(trainerId: string): Promise<Course[]> {
-  return live(
-    () => mock.getCoursesByTrainer(trainerId),
-    async () => {
-      const { data, error } = await supabaseServer()
-        .from("courses")
-        .select("*")
-        .eq("trainer_id", trainerId);
-      if (error) throw new Error(error.message);
-      return (data ?? []).map(toCourse);
-    },
-  );
-}
-
+/* ── org stats ─────────────────────────────────────────────── */
 export async function getOrgStats(): Promise<OrgStats> {
   return live(mock.getOrgStats, async () => {
-    // Every total is an index-backed head count — none of these fetch full
-    // tables, so this stays fast whether campuses number 6 or 6,000.
-    const [
-      studentsSample, // bounded sample — used only for progress/attendance averages
-      placedSample, // bounded sample — used only for the salary average
-      totalCampuses,
-      totalStudents,
-      totalTrainers,
-      runningCourses,
-      activeClasses,
-      studentsPlaced,
-    ] = await Promise.all([
-      getStudents(),
-      getPlacedStudents(500),
-      headCount("campuses"),
-      headCount("students"),
-      headCount("trainers"),
-      headCount("courses", (q) => q.eq("status", "running")),
-      headCount("active_classes"),
-      headCount("students", (q) => q.eq("placement_status", "placed")),
-    ]);
-    const activeStudents = studentsSample.filter((st) => st.enrollmentStatus === "active");
+    const db = await mongo();
+    const [totalCampuses, totalStudents, totalTrainers, runningCourses, activeClasses, sample] =
+      await Promise.all([
+        db.collection("campus").countDocuments(),
+        db.collection("student_inductions").countDocuments(),
+        db.collection("trainers").countDocuments(),
+        db.collection("new_courses").countDocuments({ status: true }),
+        db.collection("slots").countDocuments(),
+        getStudents(),
+      ]);
+    const active = sample.filter((st) => st.enrollmentStatus === "active");
     const avg = (values: number[]) =>
       values.length === 0 ? 0 : Math.round(values.reduce((a, b) => a + b, 0) / values.length);
     return {
@@ -497,43 +628,10 @@ export async function getOrgStats(): Promise<OrgStats> {
       totalTrainers,
       runningCourses,
       activeClasses,
-      studentsPlaced,
-      avgPlacementSalary: avg(placedSample.map((st) => st.salary ?? 0)),
-      avgStudentProgress: avg(activeStudents.map((st) => st.progressPercent)),
-      avgAttendance: avg(activeStudents.map((st) => st.attendancePercent)),
+      studentsPlaced: 0, // no placement data in the real system
+      avgPlacementSalary: 0,
+      avgStudentProgress: avg(active.map((st) => st.progressPercent)),
+      avgAttendance: avg(active.map((st) => st.attendancePercent)),
     };
   });
-}
-
-/* ── lookups for rendering names from ids ──────────────────── */
-
-export interface Lookups {
-  campusName: Record<string, string>;
-  trainerName: Record<string, string>;
-  courseName: Record<string, string>;
-}
-
-export async function getLookups(): Promise<Lookups> {
-  const map = (rows: Row[]) =>
-    Object.fromEntries(rows.map((r) => [s(r.id), s(r.name)]));
-  return live(
-    () => ({
-      campusName: map(mock.getCampuses() as unknown as Row[]),
-      trainerName: map(mock.getTrainers() as unknown as Row[]),
-      courseName: map(mock.getCourses() as unknown as Row[]),
-    }),
-    async () => {
-      // Names only — a fraction of the payload of full rows.
-      const [campuses, trainers, courses] = await Promise.all([
-        fetchAll("campuses", "id,name"),
-        fetchAll("trainers", "id,name"),
-        fetchAll("courses", "id,name"),
-      ]);
-      return {
-        campusName: map(campuses),
-        trainerName: map(trainers),
-        courseName: map(courses),
-      };
-    },
-  );
 }

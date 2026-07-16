@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp,
@@ -14,10 +15,9 @@ import {
   RotateCcw,
   Sparkles,
   X,
-  Zap,
 } from "lucide-react";
 import type { UserRole } from "@/types/management";
-import { AGENT_MODEL_LABEL, askAgent, type AgentMode, type ChatMessage } from "@/lib/ai/agent";
+import { askAgent, type AgentMode, type ChatMessage } from "@/lib/ai/agent";
 import { useSession } from "@/lib/auth";
 import { useVoice, voiceSupported, type VoiceLang } from "@/lib/voice";
 import { Avatar } from "@/components/portal/ui";
@@ -48,6 +48,7 @@ const timeFormatter = new Intl.DateTimeFormat("en", { hour: "numeric", minute: "
 const OFFER_MARKER = "[[OFFER_DOCUMENT]]";
 
 export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "trainer"> }) {
+  const router = useRouter();
   const session = useSession();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -93,6 +94,9 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
           createdAt: new Date().toISOString(),
         },
       ]);
+      // The agent just created / edited / deleted a record — invalidate the
+      // Next.js client cache so every dashboard list reflects the change.
+      if (reply.mutated) router.refresh();
       return reply.content;
     } finally {
       setThinking(false);
@@ -131,50 +135,11 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
   };
 
   return (
-    <div className="relative flex h-[calc(100svh-190px)] min-h-[540px] flex-col overflow-hidden rounded-3xl border border-edge bg-white shadow-xl shadow-brand-950/5">
-      {/* Chat header */}
-      <div className="flex items-center justify-between gap-3 border-b border-edge bg-gradient-to-r from-brand-50 via-white to-accent-50 px-5 py-4">
-        <div className="flex items-center gap-3">
-          <span className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-600 to-accent-500 text-white shadow-lg shadow-accent-500/25">
-            <Sparkles className="h-5 w-5" aria-hidden />
-            <span
-              className={cn(
-                "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white",
-                mode === "live" ? "bg-accent-500" : "bg-amber-400",
-              )}
-              aria-hidden
-            />
-          </span>
-          <div>
-            <h2 className="font-display text-xl leading-tight text-black">Saylani Intelligence</h2>
-            <p className="text-xs text-ink-muted">
-              Your {role === "admin" ? "operations" : "teaching"} copilot
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="hidden items-center gap-1.5 rounded-full border border-edge bg-white px-3 py-1.5 text-xs font-semibold text-ink-muted sm:inline-flex">
-            <Zap className="h-3.5 w-3.5 text-accent-600" aria-hidden />
-            {AGENT_MODEL_LABEL}
-          </span>
-          {messages.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setMessages([])}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-edge text-ink-muted transition-colors hover:border-brand-400 hover:text-brand-700"
-              aria-label="Start a new conversation"
-              title="New conversation"
-            >
-              <RotateCcw className="h-4 w-4" aria-hidden />
-            </button>
-          )}
-        </div>
-      </div>
-
+    <div className="relative flex h-full flex-col overflow-hidden bg-gradient-to-br from-brand-50 via-white to-accent-50">
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6">
         {messages.length === 0 ? (
-          <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center text-center">
+          <div className="mx-auto flex h-full max-w-4xl flex-col items-center justify-center text-center">
             <motion.span
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -198,7 +163,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.4, delay: 0.15 + i * 0.07 }}
                   onClick={() => send(p.prompt)}
-                  className="portal-glow group rounded-2xl border border-edge bg-white p-4 text-left transition-all hover:-translate-y-0.5"
+                  className="portal-glow portal-glow-plain group rounded-2xl border border-edge bg-white p-4 text-left transition-all hover:-translate-y-0.5"
                 >
                   <p className="text-sm font-bold text-ink group-hover:text-brand-700">{p.title}</p>
                   <p className="mt-1 text-xs leading-relaxed text-ink-muted">{p.prompt}</p>
@@ -207,7 +172,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
             </div>
           </div>
         ) : (
-          <div className="mx-auto max-w-3xl space-y-6">
+          <div className="mx-auto max-w-5xl space-y-6">
             <AnimatePresence initial={false}>
               {messages.map((message, index) => {
                 const offersDocument = message.role === "assistant" && message.content.includes(OFFER_MARKER);
@@ -329,9 +294,9 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
             e.preventDefault();
             send(input);
           }}
-          className="mx-auto max-w-3xl"
+          className="mx-auto max-w-5xl"
         >
-          <div className="flex items-end gap-2 rounded-2xl border-2 border-edge bg-white p-2 shadow-sm transition-colors focus-within:border-brand-500">
+          <div className="portal-glow flex items-end gap-2 rounded-2xl border-2 border-edge bg-white p-2 transition-colors focus-within:border-brand-500">
             <label htmlFor="agent-input" className="sr-only">
               Message Saylani Intelligence
             </label>
@@ -344,6 +309,17 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
               placeholder={`Ask about ${role === "admin" ? "campuses, placements, trainers…" : "your students, batches, placements…"}`}
               className="max-h-36 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:outline-none"
             />
+            {messages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setMessages([])}
+                aria-label="Start a new conversation"
+                title="New conversation"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-edge text-ink-muted transition-all hover:scale-105 hover:border-brand-400 hover:text-brand-700"
+              >
+                <RotateCcw className="h-4 w-4" aria-hidden />
+              </button>
+            )}
             {canUseVoice && (
               <button
                 type="button"

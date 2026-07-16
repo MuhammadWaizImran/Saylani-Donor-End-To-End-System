@@ -1,49 +1,52 @@
 /**
- * Creates the demo portal accounts in Supabase Auth (pre-confirmed).
+ * Creates the demo donor account used for local/e2e testing.
  *
  *   npm run auth:seed
  *
- * Safe to re-run — existing accounts are left untouched.
+ * Admin and trainer accounts are the company's real MongoDB records
+ * (`users` / `trainers`) and aren't seeded here — log in with a real
+ * account, or use the temporary-account pattern in scripts/e2e-test.ts for
+ * automated testing. Donor accounts have no real-data equivalent, so they
+ * live in our own `portal_donors` collection and are safe to seed.
+ *
+ * Safe to re-run — an existing donor account is left untouched.
  */
 import { join } from "node:path";
 import { config } from "dotenv";
-import { createClient } from "@supabase/supabase-js";
+import { MongoClient } from "mongodb";
+import bcrypt from "bcryptjs";
 
 config({ path: join(process.cwd(), ".env.local") });
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!url || !key) {
-  console.error("✗ Supabase env vars missing in .env.local");
+const uri = process.env.MONGODB_URI;
+if (!uri) {
+  console.error("✗ MONGODB_URI missing in .env.local");
   process.exit(1);
 }
-const db = createClient(url, key, { auth: { persistSession: false } });
 
-const demoUsers = [
-  { email: "admin@saylani.org", password: "admin123", name: "Muhammad Yousuf", role: "admin" },
-  { email: "donor@saylani.org", password: "donor123", name: "Ahmed Raza", role: "donor" },
-  { email: "kashif.mehmood@saylani.org", password: "trainer123", name: "Kashif Mehmood", role: "trainer" },
-];
+const demoDonor = { email: "donor@saylani.org", password: "donor123", name: "Ahmed Raza" };
 
 async function main() {
-  for (const user of demoUsers) {
-    const { error } = await db.auth.admin.createUser({
-      email: user.email,
-      password: user.password,
-      email_confirm: true,
-      user_metadata: { name: user.name, role: user.role },
+  const client = new MongoClient(uri!);
+  await client.connect();
+  const donors = client.db().collection("portal_donors");
+
+  const existing = await donors.findOne({ email: demoDonor.email });
+  if (existing) {
+    console.log(`  = ${demoDonor.email} (donor) — already exists`);
+  } else {
+    const passwordHash = await bcrypt.hash(demoDonor.password, 10);
+    await donors.insertOne({
+      name: demoDonor.name,
+      email: demoDonor.email,
+      password: passwordHash,
+      createdAt: new Date(),
     });
-    if (error) {
-      if (/already been registered/i.test(error.message)) {
-        console.log(`  = ${user.email} (${user.role}) — already exists`);
-      } else {
-        throw new Error(`${user.email}: ${error.message}`);
-      }
-    } else {
-      console.log(`  ✓ ${user.email} (${user.role}) created`);
-    }
+    console.log(`  ✓ ${demoDonor.email} (donor) created`);
   }
-  console.log("\n✓ Demo accounts ready.");
+
+  await client.close();
+  console.log("\n✓ Demo donor account ready.");
 }
 
 main().catch((error) => {

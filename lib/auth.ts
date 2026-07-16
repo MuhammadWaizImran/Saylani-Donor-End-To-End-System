@@ -1,37 +1,22 @@
 "use client";
 
 /**
- * Client auth — real Supabase Auth (cookie sessions).
- *
- * Signup goes through /api/auth/signup (server creates a pre-confirmed
- * user; admin signups need the invite code), then signs in. Sessions are
- * verified server-side in pages/API routes via lib/auth-server.ts.
+ * Client auth — custom JWT-cookie sessions backed by MongoDB (see
+ * lib/auth-server.ts / app/api/auth/*). Signup goes through /api/auth/signup
+ * (donor accounts only — admin/trainer accounts are the company's real
+ * MongoDB records and aren't self-served), then logs in. Sessions are
+ * verified server-side in pages/API routes via lib/auth-server.ts; the
+ * client only ever sees the session via /api/auth/session since the cookie
+ * itself is httpOnly.
  */
 import { useSyncExternalStore } from "react";
-import type { Session as SupabaseSession } from "@supabase/supabase-js";
 import type { Session, UserRole } from "@/types/management";
-import { supabaseBrowser } from "@/lib/supabase-browser";
-
-function toSession(supabase: SupabaseSession | null): Session | null {
-  const user = supabase?.user;
-  if (!user) return null;
-  const meta = (user.user_metadata ?? {}) as { name?: string; role?: string };
-  const role = meta.role;
-  if (role !== "admin" && role !== "donor" && role !== "trainer") return null;
-  return {
-    userId: user.id,
-    name: meta.name ?? user.email ?? "User",
-    email: user.email ?? "",
-    role,
-  };
-}
 
 export async function signUp(input: {
   name: string;
   email: string;
   password: string;
-  role: Extract<UserRole, "admin" | "donor">;
-  adminCode?: string;
+  role: "donor";
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const res = await fetch("/api/auth/signup", {
@@ -44,13 +29,7 @@ export async function signUp(input: {
   } catch {
     return { ok: false, error: "Network error — please try again." };
   }
-  // Account created — sign straight in.
-  const { error } = await supabaseBrowser().auth.signInWithPassword({
-    email: input.email,
-    password: input.password,
-  });
-  if (error) return { ok: false, error: error.message };
-  return { ok: true };
+  return login(input.email, input.password, "donor");
 }
 
 export async function login(
@@ -58,33 +37,26 @@ export async function login(
   password: string,
   role: UserRole,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const client = supabaseBrowser();
-  const { data, error } = await client.auth.signInWithPassword({ email, password });
-  if (error) {
-    return {
-      ok: false,
-      error: /invalid login credentials/i.test(error.message)
-        ? "Invalid email or password."
-        : error.message,
-    };
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, role }),
+    });
+    const payload = await res.json();
+    if (!res.ok) return { ok: false, error: payload.error ?? "Invalid email or password." };
+    cached = payload.session;
+    emit();
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Network error — please try again." };
   }
-  const session = toSession(data.session);
-  if (!session) {
-    await client.auth.signOut();
-    return { ok: false, error: "This account has no portal role assigned — contact an admin." };
-  }
-  if (session.role !== role) {
-    await client.auth.signOut();
-    return {
-      ok: false,
-      error: `This account is registered as ${session.role} — switch to the ${session.role} tab to log in.`,
-    };
-  }
-  return { ok: true };
 }
 
 export async function logout() {
-  await supabaseBrowser().auth.signOut();
+  await fetch("/api/auth/logout", { method: "POST" });
+  cached = null;
+  emit();
 }
 
 /* ── reactive session (undefined = loading, null = signed out) ── */
@@ -100,15 +72,16 @@ function emit() {
 function init() {
   if (initialized) return;
   initialized = true;
-  const client = supabaseBrowser();
-  client.auth.getSession().then(({ data }) => {
-    cached = toSession(data.session);
-    emit();
-  });
-  client.auth.onAuthStateChange((_event, session) => {
-    cached = toSession(session);
-    emit();
-  });
+  fetch("/api/auth/session")
+    .then((res) => res.json())
+    .then((payload) => {
+      cached = payload.session;
+      emit();
+    })
+    .catch(() => {
+      cached = null;
+      emit();
+    });
 }
 
 function subscribe(callback: () => void) {

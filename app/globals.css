@@ -71,8 +71,115 @@
   color-scheme: light;
 }
 
+/* ── Logo intro (app boot animation) ────────────────────────────
+   Top-level (NOT inside @theme) so Tailwind always emits them — these
+   keyframes are referenced directly from inline styles in
+   components/logo-intro.tsx, not via an --animate-* token. */
+@keyframes smit-intro-typewriter {
+  0% {
+    clip-path: inset(0 100% 0 0);
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+@keyframes smit-intro-caret-move {
+  0% {
+    left: 6%;
+    opacity: 1;
+  }
+  100% {
+    left: 93%;
+    opacity: 1;
+  }
+}
+@keyframes smit-intro-caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes smit-intro-caret-fadeout {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes smit-intro-arc {
+  0% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+    transform: translateX(-10px) rotate(-6deg);
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+    transform: translateX(0) rotate(0deg);
+  }
+}
+@keyframes smit-intro-figure {
+  0% {
+    clip-path: inset(100% 0 0 0);
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}
+@keyframes smit-intro-cap-drop {
+  0% {
+    transform: translateY(-190px) rotate(-16deg);
+    opacity: 0;
+  }
+  55% {
+    opacity: 1;
+  }
+  70% {
+    transform: translateY(6px) rotate(3deg);
+  }
+  85% {
+    transform: translateY(-3px) rotate(-1.5deg);
+  }
+  100% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+}
+@keyframes smit-intro-cap-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotate(-1.6deg);
+  }
+}
+@keyframes smit-intro-wave-sway {
+  0%,
+  100% {
+    transform: skewX(0deg) translateX(0);
+  }
+  25% {
+    transform: skewX(2.2deg) translateX(-2px);
+  }
+  75% {
+    transform: skewX(-2.2deg) translateX(2px);
+  }
+}
+
 body {
-  background: var(--color-surface);
+  /* Soft blue→green wash instead of stark white, so tinted cards read as
+     layered surfaces rather than blending into the page. Fixed so it stays
+     put while content scrolls. */
+  background-color: #edf4f9;
+  background-image: linear-gradient(160deg, rgba(11, 115, 183, 0.07) 0%, rgba(255, 255, 255, 0) 50%, rgba(140, 197, 68, 0.09) 100%);
+  background-attachment: fixed;
   color: var(--color-ink);
   font-family: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
 }
@@ -100,26 +207,6 @@ h3 em,
   color: #0c1407;
 }
 
-/* ── Homepage typography (scoped) ─────────────────────────────
-   Plain, professional, decent sans — no brand-font flourish. Only
-   the homepage ("/") uses this; the rest of the site keeps Montserrat. */
-.homepage-font,
-.homepage-font input,
-.homepage-font select,
-.homepage-font textarea,
-.homepage-font button {
-  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-}
-
-.homepage-font h1,
-.homepage-font h2,
-.homepage-font h3,
-.homepage-font .font-display {
-  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
 /* ── Portal card glow ──────────────────────────────────────────
    A slow-shifting gradient "lightning" border (brand blue → accent
    green) sitting just outside every card's edge, plus a soft ambient
@@ -131,6 +218,9 @@ h3 em,
   transition:
     box-shadow 0.3s ease,
     transform 0.2s ease;
+  /* Diagonal blue→green tint fill (layers over each card's white base) so the
+     whole card carries the brand colour instead of reading as plain white. */
+  background-image: linear-gradient(150deg, rgba(11, 115, 183, 0.16) 0%, rgba(140, 197, 68, 0.2) 100%);
   box-shadow:
     0 0 0 1px rgba(11, 115, 183, 0.07),
     0 6px 20px -8px rgba(11, 115, 183, 0.18);
@@ -174,6 +264,13 @@ h3 em,
 
 .portal-glow:hover::before {
   opacity: 1;
+}
+
+/* Opt-out of the tint fill for cards that should stay plain white (e.g. the
+   AI assistant's quick-prompt suggestion cards) while keeping the edge-glow
+   border, which lives on ::before and is untouched by this override. */
+.portal-glow.portal-glow-plain {
+  background-image: none;
 }
 
 @keyframes portal-glow-shift {

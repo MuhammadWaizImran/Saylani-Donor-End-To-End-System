@@ -10,9 +10,9 @@ import { login } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 const roles: Array<{ id: UserRole; label: string; icon: typeof ShieldCheck; hint: string }> = [
-  { id: "donor", label: "Donor", icon: HandCoins, hint: "donor@saylani.org / donor123" },
-  { id: "admin", label: "Admin", icon: ShieldCheck, hint: "admin@saylani.org / admin123" },
-  { id: "trainer", label: "Trainer", icon: GraduationCap, hint: "kashif.mehmood@saylani.org / trainer123" },
+  { id: "donor", label: "Donor", icon: HandCoins, hint: "Sign up for a donor account below" },
+  { id: "admin", label: "Admin", icon: ShieldCheck, hint: "Use your company admin account" },
+  { id: "trainer", label: "Trainer", icon: GraduationCap, hint: "Use your company trainer account" },
 ];
 
 export default function LoginPage() {

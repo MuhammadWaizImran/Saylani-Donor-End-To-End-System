@@ -20,10 +20,16 @@ import {
   searchTrainers,
 } from "@/lib/management-api";
 import { buildWordReport, uploadWordReport } from "@/lib/ai/report";
-import { supabaseServer } from "@/lib/supabase";
+import { mongo } from "@/lib/mongodb";
+import { ObjectId } from "mongodb";
 
-const newId = (prefix: string) =>
-  `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+/** String id → ObjectId when it looks like one, else the raw string. */
+const oid = (id: string): ObjectId | string => (/^[a-f0-9]{24}$/i.test(id) ? new ObjectId(id) : id);
+/** Match a stored id that may be an ObjectId or a string. */
+const idEq = (id: string) => (/^[a-f0-9]{24}$/i.test(id) ? { $in: [new ObjectId(id), id] } : id);
+const rx = (q: string) => q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Map our derived enrollment status back to a real induction status value. */
+const statusFromEnrollment = (v: string) => (v === "active" ? "enrolled" : "completed");
 
 export const toolDefinitions = [
   /* ── read tools ─────────────────────────────────────────── */
@@ -225,56 +231,15 @@ export const toolDefinitions = [
   {
     type: "function" as const,
     function: {
-      name: "create_campaign",
-      description: "ADMIN ONLY: add a new donation campaign to the public website.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          tagline: { type: "string" },
-          description: { type: "string" },
-          category: { type: "string", enum: ["Education", "Healthcare", "Food Relief", "Clean Water", "Emergency", "Orphan Care"] },
-          location: { type: "string" },
-          goal_amount_pkr: { type: "number" },
-          status: { type: "string", enum: ["active", "urgent"] },
-          ends_at: { type: "string", description: "Date YYYY-MM-DD" },
-        },
-        required: ["title", "tagline", "description", "category", "location", "goal_amount_pkr", "ends_at"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "record_donation",
-      description:
-        "ADMIN ONLY: record a donation (e.g. received via bank/cash) against a campaign. Also updates the campaign's raised amount. campaign accepts a title or id.",
-      parameters: {
-        type: "object",
-        properties: {
-          campaign: { type: "string", description: "Campaign title or id" },
-          donor_name: { type: "string" },
-          amount_pkr: { type: "number" },
-          method: { type: "string", enum: ["JazzCash", "Easypaisa", "Bank Transfer", "Card", "Cash"] },
-          is_anonymous: { type: "boolean" },
-          message: { type: "string" },
-        },
-        required: ["campaign", "donor_name", "amount_pkr"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
       name: "update_record",
       description:
-        "ADMIN ONLY: edit an EXISTING record. Pick the entity type, identify the row (student/donation: prefer email or id — names collide; trainer/course/campus/active_class/campaign: name or id works), and pass only the fields you want to change. Unknown/omitted fields are left untouched. Call the matching list_* tool first if you're not sure the identifier is unique.",
+        "ADMIN ONLY: edit an EXISTING record. Pick the entity type, identify the row (student: prefer email or id — names collide; trainer/course/campus/active_class: name or id works), and pass only the fields you want to change. Unknown/omitted fields are left untouched. Call the matching list_* tool first if you're not sure the identifier is unique.",
       parameters: {
         type: "object",
         properties: {
           entity: {
             type: "string",
-            enum: ["student", "trainer", "course", "campus", "active_class", "campaign", "donation"],
+            enum: ["student", "trainer", "course", "campus", "active_class"],
           },
           identifier: { type: "string", description: "Name, email, or id of the record to update" },
           fields: {
@@ -293,13 +258,13 @@ export const toolDefinitions = [
     function: {
       name: "delete_record",
       description:
-        "ADMIN ONLY: permanently delete a record. Confirm with the admin before calling this (e.g. \"Delete Ali Khan's student record — are you sure?\") unless they already said something unambiguous like \"yes delete it\". Deleting a campus/trainer/course/campaign that still has students/donations attached is refused — remove or reassign those first.",
+        "ADMIN ONLY: permanently delete a record. Confirm with the admin before calling this (e.g. \"Delete Ali Khan's student record — are you sure?\") unless they already said something unambiguous like \"yes delete it\". Deleting a campus/trainer/course that still has students attached is refused — remove or reassign those first.",
       parameters: {
         type: "object",
         properties: {
           entity: {
             type: "string",
-            enum: ["student", "trainer", "course", "campus", "active_class", "campaign", "donation"],
+            enum: ["student", "trainer", "course", "campus", "active_class"],
           },
           identifier: { type: "string", description: "Name, email, or id of the record to delete" },
         },
@@ -348,7 +313,7 @@ function matchByName<T extends { id: string; name?: string; title?: string }>(
 
   // Words like "campus"/"course" appear in every row's name — they must not
   // decide a match on their own.
-  const GENERIC = new Set(["campus", "campuses", "course", "class", "campaign", "the", "of", "and"]);
+  const GENERIC = new Set(["campus", "campuses", "course", "class", "the", "of", "and"]);
   const qTokens = tokens(q);
   const meaningful = qTokens.filter((t) => !GENERIC.has(t));
   if (meaningful.length === 0) return undefined;
@@ -376,7 +341,9 @@ const err = (message: string) => JSON.stringify({ error: message });
 const argStr = (args: Record<string, unknown>, key: string) => String(args[key] ?? "").trim();
 
 interface StudentRow {
+  /** The student_induction _id (our "student" row is really an enrolment). */
   id: string;
+  studentId: string;
   name: string;
   email: string;
   campus_id: string;
@@ -384,38 +351,48 @@ interface StudentRow {
   trainer_id: string;
 }
 
-/** Finds one student by id/email (exact, indexed — works at any table size)
- *  or falls back to a bounded, ambiguity-checked name search. Never fetches
- *  the whole students table. */
+/** Finds one enrolment (student_induction ⋈ student) by induction/student id,
+ *  email (exact), or name (fuzzy, ambiguity-checked). Never scans the whole
+ *  collection. */
 async function findStudent(
   identifier: string,
 ): Promise<{ row: StudentRow } | { error: string }> {
   const q = identifier.trim();
-  const db = supabaseServer();
-  const safe = q.replace(/[%,()]/g, " ").trim();
+  const db = await mongo();
+  const or: Record<string, unknown>[] = [];
+  if (/^[a-f0-9]{24}$/i.test(q)) {
+    or.push({ _id: new ObjectId(q) }, { student_id: new ObjectId(q) });
+  }
+  or.push({ "stu.email": { $regex: `^${rx(q)}$`, $options: "i" } });
+  or.push({ "stu.full_name": { $regex: rx(q), $options: "i" } });
 
-  const { data: exact, error: exactErr } = await db
-    .from("students")
-    .select("id,name,email,campus_id,course_id,trainer_id")
-    .or(`id.eq.${safe},email.eq.${safe}`)
-    .limit(1);
-  if (exactErr) return { error: exactErr.message };
-  if (exact?.[0]) return { row: exact[0] as StudentRow };
+  const rows = await db.collection("student_inductions").aggregate([
+    { $lookup: { from: "students", localField: "student_id", foreignField: "_id", as: "stu" } },
+    { $unwind: "$stu" },
+    { $match: { $or: or } },
+    { $limit: 5 },
+    { $project: { campus: 1, course: 1, trainer: 1, "stu._id": 1, "stu.full_name": 1, "stu.email": 1 } },
+  ]).toArray();
 
-  const { data: byName, error: nameErr } = await db
-    .from("students")
-    .select("id,name,email,campus_id,course_id,trainer_id")
-    .ilike("name", `%${safe}%`)
-    .limit(5);
-  if (nameErr) return { error: nameErr.message };
-  if (!byName || byName.length === 0) {
+  if (rows.length === 0) {
     return { error: `Student not found: "${identifier}". Try their email or use list_students to search.` };
   }
-  if (byName.length > 1) {
-    const options = byName.map((s) => `${s.name} (${s.email})`).join(", ");
+  if (rows.length > 1) {
+    const options = rows.map((s) => `${s.stu.full_name} (${s.stu.email})`).join(", ");
     return { error: `Multiple students match "${identifier}": ${options}. Use their email to pick one.` };
   }
-  return { row: byName[0] as StudentRow };
+  const r = rows[0];
+  return {
+    row: {
+      id: String(r._id),
+      studentId: String(r.stu._id),
+      name: String(r.stu.full_name ?? ""),
+      email: String(r.stu.email ?? ""),
+      campus_id: r.campus ? String(r.campus) : "",
+      course_id: r.course ? String(r.course) : "",
+      trainer_id: r.trainer ? String(r.trainer) : "",
+    },
+  };
 }
 
 /** Execute a tool call with role-based scoping. Returns a JSON string. */
@@ -425,7 +402,7 @@ export async function executeTool(
   ctx: AgentContext,
 ): Promise<string> {
   const trainer = ctx.role === "trainer" ? await getTrainer(ctx.userEmail) : null;
-  const db = supabaseServer();
+  const db = await mongo();
 
   /* Writes are admin-only. */
   if (
@@ -661,54 +638,50 @@ export async function executeTool(
 
     /* ── writes (admin verified above) ──────────────────── */
     case "create_campus": {
-      const id = newId("cp");
-      const { error } = await db.from("campuses").insert({
-        id,
-        name: argStr(args, "name"),
-        city: argStr(args, "city"),
-        address: argStr(args, "address"),
-        established: argStr(args, "established") || String(new Date().getFullYear()),
+      const cityName = argStr(args, "city");
+      const cityDoc = cityName
+        ? await db.collection("cities").findOne({ "en.city_name": { $regex: `^${rx(cityName)}$`, $options: "i" } })
+        : null;
+      const res = await db.collection("campus").insertOne({
+        en: { campus_name: argStr(args, "name"), address: argStr(args, "address") },
+        ur: { campus_name: argStr(args, "name"), address: argStr(args, "address") },
+        city: cityDoc?._id ?? null,
+        createdAt: new Date(),
       });
-      if (error) return err(error.message);
-      return JSON.stringify({ success: true, id, message: `Campus "${args.name}" created.` });
+      return JSON.stringify({ success: true, id: String(res.insertedId), message: `Campus "${args.name}" created.` });
     }
 
     case "create_trainer": {
       const campus = matchByName(await getCampuses(), argStr(args, "campus"));
       if (!campus) return err(`Campus not found: "${args.campus}". Use list_campuses to see options.`);
-      const id = newId("t");
-      const { error } = await db.from("trainers").insert({
-        id,
-        name: argStr(args, "name"),
+      const res = await db.collection("trainers").insertOne({
+        en: { trainer_name: argStr(args, "name") },
+        ur: { trainer_name: argStr(args, "name") },
         email: argStr(args, "email"),
-        campus_id: campus.id,
-        salary: Number(args.monthly_salary_pkr ?? 0),
-        specialization: argStr(args, "specialization"),
-        joined_at: new Date().toISOString().slice(0, 10),
+        campus: [oid(campus.id)],
+        hourly_rate: Number(args.monthly_salary_pkr ?? 0),
+        createdAt: new Date(),
       });
-      if (error) return err(error.message);
-      await db.from("campuses").update({ trainer_count: campus.trainerCount + 1 }).eq("id", campus.id);
-      return JSON.stringify({ success: true, id, message: `Trainer "${args.name}" added to ${campus.name}.` });
+      return JSON.stringify({ success: true, id: String(res.insertedId), message: `Trainer "${args.name}" added to ${campus.name}.` });
     }
 
     case "create_course": {
       const campus = matchByName(await getCampuses(), argStr(args, "campus"));
       if (!campus) return err(`Campus not found: "${args.campus}".`);
-      const courseTrainer = matchByName(await getTrainers(), argStr(args, "trainer"));
-      if (!courseTrainer) return err(`Trainer not found: "${args.trainer}". Use list_trainers to see options.`);
-      const id = newId("co");
-      const { error } = await db.from("courses").insert({
-        id,
-        name: argStr(args, "name"),
-        campus_id: campus.id,
-        trainer_id: courseTrainer.id,
-        status: argStr(args, "status") || "upcoming",
-        duration_months: Number(args.duration_months ?? 0),
-        started_at: argStr(args, "started_at"),
+      // A "course" is an offering: create the catalog entry then a batch of it.
+      const cat = await db.collection("courses").insertOne({
+        en: { course_name: argStr(args, "name") },
+        ur: { course_name: argStr(args, "name") },
+        createdAt: new Date(),
       });
-      if (error) return err(error.message);
-      await db.from("campuses").update({ course_count: campus.courseCount + 1 }).eq("id", campus.id);
-      return JSON.stringify({ success: true, id, message: `Course "${args.name}" created at ${campus.name}.` });
+      const res = await db.collection("new_courses").insertOne({
+        course: cat.insertedId,
+        campuses: [oid(campus.id)],
+        batch_number: 1,
+        status: (argStr(args, "status") || "upcoming") !== "completed",
+        createdAt: new Date(),
+      });
+      return JSON.stringify({ success: true, id: String(res.insertedId), message: `Course "${args.name}" created at ${campus.name}.` });
     }
 
     case "create_student": {
@@ -718,25 +691,28 @@ export async function executeTool(
       if (!course) return err(`Course not found: "${args.course}". Use list_courses to see options.`);
       const studentTrainer = matchByName(await getTrainers(), argStr(args, "trainer"));
       if (!studentTrainer) return err(`Trainer not found: "${args.trainer}".`);
-      const id = newId("s");
-      const { error } = await db.from("students").insert({
-        id,
-        name: argStr(args, "name"),
+      // course.id is a new_courses _id — resolve its catalog course for the induction.
+      const nc = await db.collection("new_courses").findOne({ _id: oid(course.id) as ObjectId });
+      const studentId = new ObjectId();
+      await db.collection("students").insertOne({
+        _id: studentId,
+        full_name: argStr(args, "name"),
         email: argStr(args, "email"),
-        phone: argStr(args, "phone"),
-        campus_id: campus.id,
-        course_id: course.id,
-        trainer_id: studentTrainer.id,
+        contact_number: argStr(args, "phone"),
+        createdAt: new Date(),
       });
-      if (error) return err(error.message);
-      await Promise.all([
-        db.from("campuses").update({ student_count: campus.studentCount + 1 }).eq("id", campus.id),
-        db.from("courses").update({ enrolled_count: course.enrolledCount + 1 }).eq("id", course.id),
-        db.from("trainers").update({ student_count: studentTrainer.studentCount + 1 }).eq("id", studentTrainer.id),
-      ]);
+      const ind = await db.collection("student_inductions").insertOne({
+        student_id: studentId,
+        campus: oid(campus.id),
+        course: nc?.course ?? null,
+        new_course: oid(course.id),
+        trainer: oid(studentTrainer.id),
+        status: "enrolled",
+        createdAt: new Date(),
+      });
       return JSON.stringify({
         success: true,
-        id,
+        id: String(ind.insertedId),
         message: `Student "${args.name}" enrolled in ${course.name} at ${campus.name} under ${studentTrainer.name}.`,
       });
     }
@@ -748,81 +724,17 @@ export async function executeTool(
       if (!classTrainer) return err(`Trainer not found: "${args.trainer}".`);
       const course = matchByName(await getCourses(), argStr(args, "course"));
       if (!course) return err(`Course not found: "${args.course}".`);
-      const id = newId("ac");
-      const { error } = await db.from("active_classes").insert({
-        id,
-        name: argStr(args, "name"),
-        campus_id: campus.id,
-        trainer_id: classTrainer.id,
-        course_id: course.id,
-        student_count: Number(args.student_count ?? 0),
-        timing: argStr(args, "timing"),
+      const res = await db.collection("slots").insertOne({
+        campus: oid(campus.id),
+        trainer: oid(classTrainer.id),
+        new_course: oid(course.id),
+        schedule: argStr(args, "timing"),
+        capacity: Number(args.student_count ?? 0),
+        booked: Number(args.student_count ?? 0),
+        status: "active",
+        createdAt: new Date(),
       });
-      if (error) return err(error.message);
-      return JSON.stringify({ success: true, id, message: `Class "${args.name}" scheduled.` });
-    }
-
-    case "create_campaign": {
-      const id = newId("c");
-      const title = argStr(args, "title");
-      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || id;
-      const { error } = await db.from("campaigns").insert({
-        id,
-        slug,
-        title,
-        tagline: argStr(args, "tagline"),
-        description: argStr(args, "description"),
-        story: [argStr(args, "description")],
-        image_url: "/media/hands-giving.avif",
-        gallery: ["/media/hands-giving.avif"],
-        category: argStr(args, "category"),
-        location: argStr(args, "location"),
-        goal_amount: Number(args.goal_amount_pkr ?? 0),
-        status: argStr(args, "status") || "active",
-        ends_at: new Date(`${argStr(args, "ends_at")}T23:59:59Z`).toISOString(),
-      });
-      if (error) return err(error.message);
-      return JSON.stringify({
-        success: true,
-        id,
-        message: `Campaign "${title}" is live on the website (placeholder image assigned — admin can change it later).`,
-      });
-    }
-
-    case "record_donation": {
-      const { data: campaignRows, error: cErr } = await db.from("campaigns").select("*");
-      if (cErr) return err(cErr.message);
-      const rows = (campaignRows ?? []).map((r) => ({
-        id: String(r.id),
-        title: String(r.title),
-        raised: Number(r.raised_amount),
-        donors: Number(r.donor_count),
-      }));
-      const campaign = matchByName(rows, argStr(args, "campaign"));
-      if (!campaign) return err(`Campaign not found: "${args.campaign}".`);
-      const amount = Number(args.amount_pkr ?? 0);
-      if (amount <= 0) return err("amount_pkr must be a positive number.");
-      const id = newId("d");
-      const { error } = await db.from("donations").insert({
-        id,
-        campaign_id: campaign.id,
-        donor_name: Boolean(args.is_anonymous) ? "Anonymous" : argStr(args, "donor_name"),
-        amount,
-        is_anonymous: Boolean(args.is_anonymous),
-        message: argStr(args, "message") || null,
-        method: argStr(args, "method") || "Bank Transfer",
-        status: "completed",
-      });
-      if (error) return err(error.message);
-      await db
-        .from("campaigns")
-        .update({ raised_amount: campaign.raised + amount, donor_count: campaign.donors + 1 })
-        .eq("id", campaign.id);
-      return JSON.stringify({
-        success: true,
-        id,
-        message: `Donation of Rs. ${amount.toLocaleString()} recorded against "${campaign.title}". Raised total updated.`,
-      });
+      return JSON.stringify({ success: true, id: String(res.insertedId), message: `Class "${args.name}" scheduled.` });
     }
 
     case "update_record": {
@@ -836,34 +748,33 @@ export async function executeTool(
         case "student": {
           const found = await findStudent(identifier);
           if ("error" in found) return err(found.error);
-          const patch: Record<string, unknown> = {};
-          if ("name" in fields) patch.name = String(fields.name);
-          if ("email" in fields) patch.email = String(fields.email);
-          if ("phone" in fields) patch.phone = String(fields.phone);
-          if ("enrollment_status" in fields) patch.enrollment_status = String(fields.enrollment_status);
-          if ("progress_percent" in fields) patch.progress_percent = Number(fields.progress_percent);
-          if ("attendance_percent" in fields) patch.attendance_percent = Number(fields.attendance_percent);
-          if ("placement_status" in fields) patch.placement_status = String(fields.placement_status);
-          if ("company" in fields) patch.company = String(fields.company);
-          if ("monthly_salary_pkr" in fields) patch.salary = Number(fields.monthly_salary_pkr);
-          if ("placement_date" in fields) patch.placement_date = String(fields.placement_date);
+          const stuPatch: Record<string, unknown> = {};
+          if ("name" in fields) stuPatch.full_name = String(fields.name);
+          if ("email" in fields) stuPatch.email = String(fields.email);
+          if ("phone" in fields) stuPatch.contact_number = String(fields.phone);
+          const indPatch: Record<string, unknown> = {};
+          if ("enrollment_status" in fields) indPatch.status = statusFromEnrollment(String(fields.enrollment_status));
           if ("campus" in fields) {
             const campus = matchByName(await getCampuses(), String(fields.campus));
             if (!campus) return err(`Campus not found: "${fields.campus}".`);
-            patch.campus_id = campus.id;
+            indPatch.campus = oid(campus.id);
           }
           if ("course" in fields) {
             const course = matchByName(await getCourses(), String(fields.course));
             if (!course) return err(`Course not found: "${fields.course}".`);
-            patch.course_id = course.id;
+            const nc = await db.collection("new_courses").findOne({ _id: oid(course.id) as ObjectId });
+            indPatch.new_course = oid(course.id);
+            indPatch.course = nc?.course ?? null;
           }
           if ("trainer" in fields) {
             const studentTrainer = matchByName(await getTrainers(), String(fields.trainer));
             if (!studentTrainer) return err(`Trainer not found: "${fields.trainer}".`);
-            patch.trainer_id = studentTrainer.id;
+            indPatch.trainer = oid(studentTrainer.id);
           }
-          const { error } = await db.from("students").update(patch).eq("id", found.row.id);
-          if (error) return err(error.message);
+          if (Object.keys(stuPatch).length)
+            await db.collection("students").updateOne({ _id: new ObjectId(found.row.studentId) }, { $set: stuPatch });
+          if (Object.keys(indPatch).length)
+            await db.collection("student_inductions").updateOne({ _id: new ObjectId(found.row.id) }, { $set: indPatch });
           return JSON.stringify({ success: true, id: found.row.id, message: `Updated ${found.row.name}.` });
         }
 
@@ -871,40 +782,28 @@ export async function executeTool(
           const t = matchByName(await getTrainers(), identifier);
           if (!t) return err(`Trainer not found: "${identifier}". Use list_trainers to see options.`);
           const patch: Record<string, unknown> = {};
-          if ("name" in fields) patch.name = String(fields.name);
+          if ("name" in fields) patch["en.trainer_name"] = String(fields.name);
           if ("email" in fields) patch.email = String(fields.email);
-          if ("specialization" in fields) patch.specialization = String(fields.specialization);
-          if ("monthly_salary_pkr" in fields) patch.salary = Number(fields.monthly_salary_pkr);
+          if ("monthly_salary_pkr" in fields) patch.hourly_rate = Number(fields.monthly_salary_pkr);
           if ("campus" in fields) {
             const campus = matchByName(await getCampuses(), String(fields.campus));
             if (!campus) return err(`Campus not found: "${fields.campus}".`);
-            patch.campus_id = campus.id;
+            patch.campus = [oid(campus.id)];
           }
-          const { error } = await db.from("trainers").update(patch).eq("id", t.id);
-          if (error) return err(error.message);
+          await db.collection("trainers").updateOne({ _id: oid(t.id) as ObjectId }, { $set: patch });
           return JSON.stringify({ success: true, id: t.id, message: `Updated ${t.name}.` });
         }
 
         case "course": {
           const c = matchByName(await getCourses(), identifier);
           if (!c) return err(`Course not found: "${identifier}". Use list_courses to see options.`);
-          const patch: Record<string, unknown> = {};
-          if ("name" in fields) patch.name = String(fields.name);
-          if ("status" in fields) patch.status = String(fields.status);
-          if ("duration_months" in fields) patch.duration_months = Number(fields.duration_months);
-          if ("started_at" in fields) patch.started_at = String(fields.started_at);
-          if ("campus" in fields) {
-            const campus = matchByName(await getCampuses(), String(fields.campus));
-            if (!campus) return err(`Campus not found: "${fields.campus}".`);
-            patch.campus_id = campus.id;
+          if ("name" in fields) {
+            const nc = await db.collection("new_courses").findOne({ _id: oid(c.id) as ObjectId });
+            if (nc?.course)
+              await db.collection("courses").updateOne({ _id: nc.course }, { $set: { "en.course_name": String(fields.name) } });
           }
-          if ("trainer" in fields) {
-            const courseTrainer = matchByName(await getTrainers(), String(fields.trainer));
-            if (!courseTrainer) return err(`Trainer not found: "${fields.trainer}".`);
-            patch.trainer_id = courseTrainer.id;
-          }
-          const { error } = await db.from("courses").update(patch).eq("id", c.id);
-          if (error) return err(error.message);
+          if ("status" in fields)
+            await db.collection("new_courses").updateOne({ _id: oid(c.id) as ObjectId }, { $set: { status: String(fields.status) !== "completed" } });
           return JSON.stringify({ success: true, id: c.id, message: `Updated ${c.name}.` });
         }
 
@@ -912,12 +811,13 @@ export async function executeTool(
           const c = matchByName(await getCampuses(), identifier);
           if (!c) return err(`Campus not found: "${identifier}". Use list_campuses to see options.`);
           const patch: Record<string, unknown> = {};
-          if ("name" in fields) patch.name = String(fields.name);
-          if ("city" in fields) patch.city = String(fields.city);
-          if ("address" in fields) patch.address = String(fields.address);
-          if ("established" in fields) patch.established = String(fields.established);
-          const { error } = await db.from("campuses").update(patch).eq("id", c.id);
-          if (error) return err(error.message);
+          if ("name" in fields) patch["en.campus_name"] = String(fields.name);
+          if ("address" in fields) patch["en.address"] = String(fields.address);
+          if ("city" in fields) {
+            const cityDoc = await db.collection("cities").findOne({ "en.city_name": { $regex: `^${rx(String(fields.city))}$`, $options: "i" } });
+            if (cityDoc) patch.city = cityDoc._id;
+          }
+          await db.collection("campus").updateOne({ _id: oid(c.id) as ObjectId }, { $set: patch });
           return JSON.stringify({ success: true, id: c.id, message: `Updated ${c.name}.` });
         }
 
@@ -926,85 +826,24 @@ export async function executeTool(
           const cls = matchByName(classes, identifier);
           if (!cls) return err(`Active class not found: "${identifier}". Use list_active_classes to see options.`);
           const patch: Record<string, unknown> = {};
-          if ("name" in fields) patch.name = String(fields.name);
-          if ("student_count" in fields) patch.student_count = Number(fields.student_count);
-          if ("timing" in fields) patch.timing = String(fields.timing);
+          if ("student_count" in fields) patch.booked = Number(fields.student_count);
+          if ("timing" in fields) patch.schedule = String(fields.timing);
           if ("campus" in fields) {
             const campus = matchByName(await getCampuses(), String(fields.campus));
             if (!campus) return err(`Campus not found: "${fields.campus}".`);
-            patch.campus_id = campus.id;
+            patch.campus = oid(campus.id);
           }
           if ("trainer" in fields) {
             const classTrainer = matchByName(await getTrainers(), String(fields.trainer));
             if (!classTrainer) return err(`Trainer not found: "${fields.trainer}".`);
-            patch.trainer_id = classTrainer.id;
+            patch.trainer = oid(classTrainer.id);
           }
-          if ("course" in fields) {
-            const course = matchByName(await getCourses(), String(fields.course));
-            if (!course) return err(`Course not found: "${fields.course}".`);
-            patch.course_id = course.id;
-          }
-          const { error } = await db.from("active_classes").update(patch).eq("id", cls.id);
-          if (error) return err(error.message);
+          await db.collection("slots").updateOne({ _id: oid(cls.id) as ObjectId }, { $set: patch });
           return JSON.stringify({ success: true, id: cls.id, message: `Updated class "${cls.name}".` });
         }
 
-        case "campaign": {
-          const { data: campaignRows, error: cErr } = await db.from("campaigns").select("id,title");
-          if (cErr) return err(cErr.message);
-          const campaign = matchByName((campaignRows ?? []) as Array<{ id: string; title: string }>, identifier);
-          if (!campaign) return err(`Campaign not found: "${identifier}". Check the exact title or id.`);
-          const patch: Record<string, unknown> = {};
-          if ("title" in fields) patch.title = String(fields.title);
-          if ("tagline" in fields) patch.tagline = String(fields.tagline);
-          if ("description" in fields) patch.description = String(fields.description);
-          if ("category" in fields) patch.category = String(fields.category);
-          if ("location" in fields) patch.location = String(fields.location);
-          if ("goal_amount_pkr" in fields) patch.goal_amount = Number(fields.goal_amount_pkr);
-          if ("status" in fields) patch.status = String(fields.status);
-          if ("ends_at" in fields) patch.ends_at = new Date(`${String(fields.ends_at)}T23:59:59Z`).toISOString();
-          const { error } = await db.from("campaigns").update(patch).eq("id", campaign.id);
-          if (error) return err(error.message);
-          return JSON.stringify({ success: true, id: campaign.id, message: `Updated campaign "${campaign.title}".` });
-        }
-
-        case "donation": {
-          const { data: donationRows, error: dErr } = await db
-            .from("donations")
-            .select("id,campaign_id,amount")
-            .eq("id", identifier)
-            .limit(1);
-          if (dErr) return err(dErr.message);
-          const donation = donationRows?.[0];
-          if (!donation) return err(`Donation not found: "${identifier}". Use the donation id.`);
-          const patch: Record<string, unknown> = {};
-          if ("donor_name" in fields) patch.donor_name = String(fields.donor_name);
-          if ("method" in fields) patch.method = String(fields.method);
-          if ("message" in fields) patch.message = String(fields.message);
-          if ("is_anonymous" in fields) patch.is_anonymous = Boolean(fields.is_anonymous);
-          if ("amount_pkr" in fields) {
-            const newAmount = Number(fields.amount_pkr);
-            const delta = newAmount - Number(donation.amount);
-            patch.amount = newAmount;
-            const { data: campaignRow } = await db
-              .from("campaigns")
-              .select("raised_amount")
-              .eq("id", donation.campaign_id)
-              .single();
-            if (campaignRow) {
-              await db
-                .from("campaigns")
-                .update({ raised_amount: Number(campaignRow.raised_amount) + delta })
-                .eq("id", donation.campaign_id);
-            }
-          }
-          const { error } = await db.from("donations").update(patch).eq("id", donation.id);
-          if (error) return err(error.message);
-          return JSON.stringify({ success: true, id: donation.id, message: `Updated donation ${donation.id}.` });
-        }
-
         default:
-          return err(`Unknown entity: "${entity}". Must be one of student, trainer, course, campus, active_class, campaign, donation.`);
+          return err(`Unknown entity: "${entity}". Must be one of student, trainer, course, campus, active_class.`);
       }
     }
 
@@ -1017,84 +856,59 @@ export async function executeTool(
         case "student": {
           const found = await findStudent(identifier);
           if ("error" in found) return err(found.error);
-          const { error } = await db.from("students").delete().eq("id", found.row.id);
-          if (error) return err(error.message);
-          // Decrement denormalized counters — symmetric with create_student's increments.
-          const [{ data: campusRow }, { data: courseRow }, { data: trainerRow }] = await Promise.all([
-            db.from("campuses").select("student_count").eq("id", found.row.campus_id).single(),
-            db.from("courses").select("enrolled_count").eq("id", found.row.course_id).single(),
-            db.from("trainers").select("student_count").eq("id", found.row.trainer_id).single(),
-          ]);
-          await Promise.all([
-            campusRow &&
-              db
-                .from("campuses")
-                .update({ student_count: Math.max(0, Number(campusRow.student_count) - 1) })
-                .eq("id", found.row.campus_id),
-            courseRow &&
-              db
-                .from("courses")
-                .update({ enrolled_count: Math.max(0, Number(courseRow.enrolled_count) - 1) })
-                .eq("id", found.row.course_id),
-            trainerRow &&
-              db
-                .from("trainers")
-                .update({ student_count: Math.max(0, Number(trainerRow.student_count) - 1) })
-                .eq("id", found.row.trainer_id),
-          ]);
+          // Remove this enrolment; drop the person too if it was their only one.
+          await db.collection("student_inductions").deleteOne({ _id: new ObjectId(found.row.id) });
+          const remaining = await db.collection("student_inductions").countDocuments({ student_id: new ObjectId(found.row.studentId) });
+          if (remaining === 0) await db.collection("students").deleteOne({ _id: new ObjectId(found.row.studentId) });
           return JSON.stringify({ success: true, message: `Deleted student ${found.row.name}.` });
         }
 
         case "trainer": {
           const t = matchByName(await getTrainers(), identifier);
           if (!t) return err(`Trainer not found: "${identifier}".`);
-          const [{ count: studentDeps }, { count: courseDeps }, { count: classDeps }] = await Promise.all([
-            db.from("students").select("*", { count: "exact", head: true }).eq("trainer_id", t.id),
-            db.from("courses").select("*", { count: "exact", head: true }).eq("trainer_id", t.id),
-            db.from("active_classes").select("*", { count: "exact", head: true }).eq("trainer_id", t.id),
+          const [studentDeps, classDeps] = await Promise.all([
+            db.collection("student_inductions").countDocuments({ trainer: idEq(t.id) }),
+            db.collection("slots").countDocuments({ trainer: idEq(t.id) }),
           ]);
-          if ((studentDeps ?? 0) > 0 || (courseDeps ?? 0) > 0 || (classDeps ?? 0) > 0) {
+          if (studentDeps > 0 || classDeps > 0) {
             return err(
-              `Can't delete ${t.name} — still linked to ${studentDeps ?? 0} students, ${courseDeps ?? 0} courses, and ${classDeps ?? 0} active classes. Reassign or delete those first.`,
+              `Can't delete ${t.name} — still linked to ${studentDeps} students and ${classDeps} active classes. Reassign or delete those first.`,
             );
           }
-          const { error } = await db.from("trainers").delete().eq("id", t.id);
-          if (error) return err(error.message);
+          await db.collection("trainers").deleteOne({ _id: oid(t.id) as ObjectId });
           return JSON.stringify({ success: true, message: `Deleted trainer ${t.name}.` });
         }
 
         case "course": {
           const c = matchByName(await getCourses(), identifier);
           if (!c) return err(`Course not found: "${identifier}".`);
-          const [{ count: studentDeps }, { count: classDeps }] = await Promise.all([
-            db.from("students").select("*", { count: "exact", head: true }).eq("course_id", c.id),
-            db.from("active_classes").select("*", { count: "exact", head: true }).eq("course_id", c.id),
+          const [studentDeps, classDeps] = await Promise.all([
+            db.collection("student_inductions").countDocuments({ new_course: idEq(c.id) }),
+            db.collection("slots").countDocuments({ new_course: idEq(c.id) }),
           ]);
-          if ((studentDeps ?? 0) > 0 || (classDeps ?? 0) > 0) {
+          if (studentDeps > 0 || classDeps > 0) {
             return err(
-              `Can't delete "${c.name}" — still linked to ${studentDeps ?? 0} students and ${classDeps ?? 0} active classes. Reassign or delete those first.`,
+              `Can't delete "${c.name}" — still linked to ${studentDeps} students and ${classDeps} active classes. Reassign or delete those first.`,
             );
           }
-          const { error } = await db.from("courses").delete().eq("id", c.id);
-          if (error) return err(error.message);
+          await db.collection("new_courses").deleteOne({ _id: oid(c.id) as ObjectId });
           return JSON.stringify({ success: true, message: `Deleted course "${c.name}".` });
         }
 
         case "campus": {
           const c = matchByName(await getCampuses(), identifier);
           if (!c) return err(`Campus not found: "${identifier}".`);
-          const [{ count: studentDeps }, { count: trainerDeps }, { count: courseDeps }] = await Promise.all([
-            db.from("students").select("*", { count: "exact", head: true }).eq("campus_id", c.id),
-            db.from("trainers").select("*", { count: "exact", head: true }).eq("campus_id", c.id),
-            db.from("courses").select("*", { count: "exact", head: true }).eq("campus_id", c.id),
+          const [studentDeps, trainerDeps, classDeps] = await Promise.all([
+            db.collection("student_inductions").countDocuments({ campus: idEq(c.id) }),
+            db.collection("trainers").countDocuments({ campus: idEq(c.id) }),
+            db.collection("slots").countDocuments({ campus: idEq(c.id) }),
           ]);
-          if ((studentDeps ?? 0) > 0 || (trainerDeps ?? 0) > 0 || (courseDeps ?? 0) > 0) {
+          if (studentDeps > 0 || trainerDeps > 0 || classDeps > 0) {
             return err(
-              `Can't delete "${c.name}" — still linked to ${studentDeps ?? 0} students, ${trainerDeps ?? 0} trainers, and ${courseDeps ?? 0} courses. Reassign or delete those first.`,
+              `Can't delete "${c.name}" — still linked to ${studentDeps} students, ${trainerDeps} trainers, and ${classDeps} active classes. Reassign or delete those first.`,
             );
           }
-          const { error } = await db.from("campuses").delete().eq("id", c.id);
-          if (error) return err(error.message);
+          await db.collection("campus").deleteOne({ _id: oid(c.id) as ObjectId });
           return JSON.stringify({ success: true, message: `Deleted campus "${c.name}".` });
         }
 
@@ -1102,58 +916,12 @@ export async function executeTool(
           const { classes } = await searchActiveClasses({ pageSize: 50, query: identifier });
           const cls = matchByName(classes, identifier);
           if (!cls) return err(`Active class not found: "${identifier}".`);
-          const { error } = await db.from("active_classes").delete().eq("id", cls.id);
-          if (error) return err(error.message);
+          await db.collection("slots").deleteOne({ _id: oid(cls.id) as ObjectId });
           return JSON.stringify({ success: true, message: `Deleted class "${cls.name}".` });
         }
 
-        case "campaign": {
-          const { data: campaignRows, error: cErr } = await db.from("campaigns").select("id,title");
-          if (cErr) return err(cErr.message);
-          const campaign = matchByName((campaignRows ?? []) as Array<{ id: string; title: string }>, identifier);
-          if (!campaign) return err(`Campaign not found: "${identifier}".`);
-          const { count: donationDeps } = await db
-            .from("donations")
-            .select("*", { count: "exact", head: true })
-            .eq("campaign_id", campaign.id);
-          if ((donationDeps ?? 0) > 0) {
-            return err(`Can't delete "${campaign.title}" — it has ${donationDeps} donations recorded against it. Remove those first.`);
-          }
-          const { error } = await db.from("campaigns").delete().eq("id", campaign.id);
-          if (error) return err(error.message);
-          return JSON.stringify({ success: true, message: `Deleted campaign "${campaign.title}".` });
-        }
-
-        case "donation": {
-          const { data: donationRows, error: dErr } = await db
-            .from("donations")
-            .select("id,campaign_id,amount")
-            .eq("id", identifier)
-            .limit(1);
-          if (dErr) return err(dErr.message);
-          const donation = donationRows?.[0];
-          if (!donation) return err(`Donation not found: "${identifier}". Use the donation id.`);
-          const { error } = await db.from("donations").delete().eq("id", donation.id);
-          if (error) return err(error.message);
-          const { data: campaignRow } = await db
-            .from("campaigns")
-            .select("raised_amount,donor_count")
-            .eq("id", donation.campaign_id)
-            .single();
-          if (campaignRow) {
-            await db
-              .from("campaigns")
-              .update({
-                raised_amount: Math.max(0, Number(campaignRow.raised_amount) - Number(donation.amount)),
-                donor_count: Math.max(0, Number(campaignRow.donor_count) - 1),
-              })
-              .eq("id", donation.campaign_id);
-          }
-          return JSON.stringify({ success: true, message: `Deleted donation ${donation.id} and adjusted campaign totals.` });
-        }
-
         default:
-          return err(`Unknown entity: "${entity}". Must be one of student, trainer, course, campus, active_class, campaign, donation.`);
+          return err(`Unknown entity: "${entity}". Must be one of student, trainer, course, campus, active_class.`);
       }
     }
 

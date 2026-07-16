@@ -1,23 +1,13 @@
 import type { Metadata } from "next";
-import { Inter, Montserrat } from "next/font/google";
+import { Montserrat } from "next/font/google";
 import "./globals.css";
-import { Header } from "@/components/layout/header";
-import { Footer } from "@/components/layout/footer";
+import { LogoIntro } from "@/components/logo-intro";
 
-// Site-wide typeface (portal + rest of the marketing site) — matches
-// saylanimit.com's brand font.
+// App-wide typeface — matches saylanimit.com's brand font.
 const montserrat = Montserrat({
   variable: "--font-montserrat",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700", "800"],
-  display: "swap",
-});
-
-// Homepage-only typeface — a plain, professional, decent sans (no brand
-// flourish), scoped via .homepage-font in app/page.tsx.
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
   display: "swap",
 });
 
@@ -34,24 +24,11 @@ const siteUrl =
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "SMIT Donations — Saylani Mass IT Training",
-    template: "%s | SMIT Donations",
+    default: "SMIT Portal — Saylani Mass IT Training",
+    template: "%s | SMIT Portal",
   },
-  description:
-    "Donate to education, food relief, healthcare, clean water, and emergency campaigns run by SMIT — Saylani Mass IT Training. 100% donation policy, full transparency.",
-  openGraph: {
-    type: "website",
-    siteName: "SMIT Donations",
-    title: "SMIT Donations — Your giving becomes someone's tomorrow",
-    description:
-      "Support education, food, healthcare, clean water, and relief campaigns with full transparency.",
-    images: ["/smit-app-logo.avif"],
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "SMIT Donations",
-    description: "Donate to verified campaigns with 100% transparency.",
-  },
+  description: "Management dashboard for Saylani Mass IT Training — campuses, students, trainers, and courses.",
+  robots: { index: false },
 };
 
 export default function RootLayout({
@@ -60,19 +37,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${montserrat.variable} ${inter.variable} h-full antialiased`}>
+    <html lang="en" className={`${montserrat.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col bg-white">
+        <LogoIntro />
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-full focus:bg-brand-700 focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:text-white"
         >
           Skip to main content
         </a>
-        <Header />
-        <main id="main-content" className="flex-1">
+        <main id="main-content" className="flex flex-1 flex-col">
           {children}
         </main>
-        <Footer />
       </body>
     </html>
   );

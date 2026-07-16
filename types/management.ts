@@ -88,6 +88,19 @@ export interface ActiveClass {
   timing: string; // e.g. "Mon–Fri · 9:00–11:00 AM"
 }
 
+export interface SuccessStory {
+  id: string;
+  name: string;
+  designation: string;
+  photo: string;
+  story: string;
+  description?: string;
+  video?: string;
+  order: number;
+  /** True for placeholder entries added while the company's real data is still empty. */
+  isDemo?: boolean;
+}
+
 export interface OrgStats {
   totalCampuses: number;
   totalStudents: number;

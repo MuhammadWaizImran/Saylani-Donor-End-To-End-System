@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Briefcase,
@@ -8,9 +9,7 @@ import {
   CalendarClock,
   CheckCircle2,
   GraduationCap,
-  HandCoins,
   Loader2,
-  Megaphone,
   School,
   Users,
   XCircle,
@@ -26,7 +25,7 @@ interface FieldDef {
   label: string;
   type: "text" | "email" | "number" | "date" | "textarea" | "select" | "checkbox";
   /** For selects: static options, or a lookup key resolved from the API. */
-  options?: string[] | "campuses" | "trainers" | "courses" | "campaigns";
+  options?: string[] | "campuses" | "trainers" | "courses";
   placeholder?: string;
   required?: boolean;
   default?: string | boolean;
@@ -54,23 +53,6 @@ const entities: EntityDef[] = [
       { key: "course_id", label: "Course", type: "select", options: "courses", required: true },
       { key: "trainer_id", label: "Trainer", type: "select", options: "trainers", required: true },
       { key: "enrollment_status", label: "Enrollment status", type: "select", options: ["active", "inactive"], default: "active", required: true },
-    ],
-  },
-  {
-    id: "campaign",
-    label: "Campaign",
-    icon: Megaphone,
-    blurb: "Publish a new donation campaign on the public website.",
-    fields: [
-      { key: "title", label: "Title", type: "text", placeholder: "e.g. Ramzan Ration Drive 2027", required: true },
-      { key: "tagline", label: "Tagline", type: "text", placeholder: "One line that moves hearts", required: true },
-      { key: "description", label: "Description", type: "textarea", placeholder: "What is this campaign about?", required: true },
-      { key: "category", label: "Category", type: "select", options: ["Education", "Healthcare", "Food Relief", "Clean Water", "Emergency", "Orphan Care"], required: true },
-      { key: "location", label: "Location", type: "text", placeholder: "e.g. Karachi", required: true },
-      { key: "goal_amount", label: "Goal amount (PKR)", type: "number", placeholder: "1000000", required: true },
-      { key: "status", label: "Status", type: "select", options: ["active", "urgent"], default: "active", required: true },
-      { key: "ends_at", label: "End date", type: "date", required: true },
-      { key: "image_url", label: "Image path/URL", type: "text", placeholder: "/media/hands-giving.avif", default: "/media/hands-giving.avif" },
     ],
   },
   {
@@ -127,33 +109,19 @@ const entities: EntityDef[] = [
       { key: "timing", label: "Timing", type: "text", placeholder: "Mon–Fri · 9:00–11:00 AM", required: true },
     ],
   },
-  {
-    id: "donation",
-    label: "Donation",
-    icon: HandCoins,
-    blurb: "Record an offline donation (bank/cash) — campaign totals update automatically.",
-    fields: [
-      { key: "campaign_id", label: "Campaign", type: "select", options: "campaigns", required: true },
-      { key: "donor_name", label: "Donor name", type: "text", required: true },
-      { key: "amount", label: "Amount (PKR)", type: "number", placeholder: "5000", required: true },
-      { key: "method", label: "Method", type: "select", options: ["Bank Transfer", "Cash", "JazzCash", "Easypaisa", "Card"], default: "Bank Transfer", required: true },
-      { key: "is_anonymous", label: "Anonymous donor (hide name publicly)", type: "checkbox", default: false },
-      { key: "message", label: "Message (optional)", type: "textarea", placeholder: "Donor's message…" },
-    ],
-  },
 ];
 
 interface LookupData {
   campuses: Option[];
   trainers: Option[];
   courses: Option[];
-  campaigns: Option[];
 }
 
 const inputClass =
   "w-full rounded-xl border-2 border-edge bg-white px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none";
 
 export function DataEntry() {
+  const router = useRouter();
   const [active, setActive] = useState(entities[0]);
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [lookups, setLookups] = useState<LookupData | null>(null);
@@ -164,7 +132,7 @@ export function DataEntry() {
     fetch("/api/admin/records")
       .then((res) => res.json())
       .then((data: LookupData) => setLookups(data))
-      .catch(() => setLookups({ campuses: [], trainers: [], courses: [], campaigns: [] }));
+      .catch(() => setLookups({ campuses: [], trainers: [], courses: [] }));
   };
   useEffect(loadLookups, []);
 
@@ -207,6 +175,10 @@ export function DataEntry() {
         setResult({ ok: true, message: payload.message ?? "Saved." });
         setValues({});
         loadLookups(); // fresh dropdowns (e.g. new campus available for students)
+        // Invalidate Next.js' client router cache so every dashboard list
+        // (Students, Campuses, …) re-fetches from MongoDB on next view — the
+        // record just written appears immediately, no manual refresh needed.
+        router.refresh();
       }
     } catch {
       setResult({ ok: false, message: "Network error — please try again." });
@@ -351,7 +323,7 @@ export function DataEntry() {
             {submitting ? "Saving…" : `Save ${active.label.toLowerCase()}`}
           </button>
           <p className="mt-3 text-xs text-ink-muted">
-            Saved directly to the live database — dashboards, website, and the AI assistant see it immediately.
+            Saved directly to the live database — every dashboard and the AI assistant see it immediately.
           </p>
         </motion.form>
       </AnimatePresence>

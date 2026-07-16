@@ -1,18 +1,19 @@
 import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
 import { z } from "zod";
-import { supabaseServer } from "@/lib/supabase";
+import { mongo } from "@/lib/mongodb";
 
 /**
- * Account creation (server-side, service role) — creates pre-confirmed
- * users so no SMTP is needed. Admin signups require the invite code
- * (ADMIN_SIGNUP_CODE) so random visitors can't grant themselves admin.
+ * Donor account creation only. Admin/trainer accounts are the company's
+ * real MongoDB records (`users` / `trainers`) and are managed by them, not
+ * self-served here. Donor accounts have no real-data equivalent, so they
+ * live in our own `portal_donors` collection.
  */
 const schema = z.object({
   name: z.string().min(3).max(80),
   email: z.string().email(),
   password: z.string().min(6).max(72),
-  role: z.enum(["donor", "admin"]),
-  adminCode: z.string().optional(),
+  role: z.literal("donor"),
 });
 
 export async function POST(req: Request) {
@@ -31,31 +32,20 @@ export async function POST(req: Request) {
       { status: 422 },
     );
   }
-  const { name, email, password, role, adminCode } = parsed.data;
+  const { name, email, password } = parsed.data;
 
-  if (role === "admin") {
-    const expected = process.env.ADMIN_SIGNUP_CODE;
-    if (!expected || adminCode !== expected) {
-      return NextResponse.json(
-        { error: "Invalid admin invite code. Ask an existing admin for the code." },
-        { status: 403 },
-      );
-    }
+  const db = await mongo();
+  const donors = db.collection("portal_donors");
+  const existing = await donors.findOne({ email: { $regex: `^${email}$`, $options: "i" } });
+  if (existing) {
+    return NextResponse.json(
+      { error: "An account with this email already exists — try logging in." },
+      { status: 400 },
+    );
   }
 
-  const { error } = await supabaseServer().auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: { name, role },
-  });
-
-  if (error) {
-    const friendly = /already been registered/i.test(error.message)
-      ? "An account with this email already exists — try logging in."
-      : error.message;
-    return NextResponse.json({ error: friendly }, { status: 400 });
-  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  await donors.insertOne({ name, email, password: passwordHash, createdAt: new Date() });
 
   return NextResponse.json({ success: true });
 }

@@ -31,6 +31,12 @@ let activeKeyIndex = 0;
 
 const RETRYABLE_STATUSES = new Set([401, 403, 429, 500, 502, 503]);
 
+/** Tools that change the database — used to tell the client to refresh the
+ *  dashboard after the agent creates, edits, or deletes a record. */
+function isMutatingTool(name: string): boolean {
+  return name.startsWith("create_") || name === "update_record" || name === "delete_record";
+}
+
 interface IncomingMessage {
   role: "user" | "assistant";
   content: string;
@@ -49,7 +55,7 @@ interface GroqMessage {
 
 function buildSystemPrompt(ctx: AgentContext): string {
   return [
-    `You are "Saylani Intelligence" — a friendly AI companion AND a capable operations agent for SMIT (Saylani Mass IT Training), a Pakistani welfare organization running free IT education, food relief, healthcare, and donation campaigns.`,
+    `You are "Saylani Intelligence" — a friendly AI companion AND a capable operations agent for SMIT (Saylani Mass IT Training), a Pakistani non-profit running free IT education campuses.`,
     `You are talking to ${ctx.userName}, ${ctx.role === "admin" ? "an ADMIN with full organizational access" : "a TRAINER who may only see their own students, courses, classes, and placements"}.`,
     ``,
     `You naturally switch between two behaviours depending on what the user says:`,
@@ -60,9 +66,9 @@ function buildSystemPrompt(ctx: AgentContext): string {
     ``,
     ctx.role === "admin"
       ? [
-          `DATA ENTRY (admins only): you have FULL database access — CREATE (create_* / record_*), EDIT (update_record), and DELETE (delete_record) on students, campuses, trainers, courses, classes, campaigns, and donations. Follow this discipline strictly:`,
+          `DATA ENTRY (admins only): you have FULL database access — CREATE (create_*), EDIT (update_record), and DELETE (delete_record) on students, campuses, trainers, courses, and classes. Follow this discipline strictly:`,
           `- If any REQUIRED field is missing, ask for it in ONE short message before creating. Optional fields may be sensibly defaulted.`,
-          `- When a record references a campus/course/trainer/campaign, pass the name the admin gave — the tool resolves names to ids. If the tool replies "not found", call the matching list tool, show the closest options, and ask the admin to pick. Do not guess.`,
+          `- When a record references a campus/course/trainer, pass the name the admin gave — the tool resolves names to ids. If the tool replies "not found", call the matching list tool, show the closest options, and ask the admin to pick. Do not guess.`,
           `- For update_record: only pass the fields the admin actually wants changed. For students, prefer identifying by email (names collide) — if update_record/delete_record replies "multiple students match", show the options it returned and ask which one.`,
           `- For delete_record: this is IRREVERSIBLE. Unless the admin already said something unambiguous like "yes delete it" / "confirmed", ask once ("Delete Ali Khan's record — you're sure?") before calling the tool. If the tool refuses because other records still reference it (e.g. a campus with students), explain that plainly — don't try to force it.`,
           `- A write/edit/delete is only done when the tool returns {"success": true}. Then confirm to the admin exactly what changed, quoting the details. If the tool returns an error, tell the admin plainly what failed and what you need — NEVER claim something was saved/changed/deleted when it wasn't.`,
@@ -197,6 +203,10 @@ export async function POST(req: Request) {
       ...messages.slice(-12).map((m) => ({ role: m.role, content: m.content })),
     ];
 
+    // Tracks whether any tool that changed the database ran this turn, so the
+    // client can refresh the dashboard views to reflect the create/edit/delete.
+    let mutated = false;
+
     // Agent loop: keep executing tool calls until the model answers in text.
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const reply = await callGroq(thread);
@@ -205,6 +215,7 @@ export async function POST(req: Request) {
         return NextResponse.json({
           content: reply.content ?? "I couldn't produce a response — please try rephrasing.",
           mode: "live",
+          mutated,
         });
       }
 
@@ -216,6 +227,7 @@ export async function POST(req: Request) {
         } catch {
           // Malformed arguments — run the tool with defaults.
         }
+        if (isMutatingTool(call.function.name)) mutated = true;
         let result = await executeTool(call.function.name, args, ctx);
         if (result.length > MAX_TOOL_RESULT_CHARS) {
           result = `${result.slice(0, MAX_TOOL_RESULT_CHARS)}… [truncated — ask a narrower question for full detail]`;
@@ -228,6 +240,7 @@ export async function POST(req: Request) {
       content:
         "I gathered the data but hit my reasoning limit for this question — try asking it in a more specific way.",
       mode: "live",
+      mutated,
     });
   } catch (error) {
     console.error("[api/chat] all Groq keys failed:", error);

@@ -24,6 +24,9 @@ export type AgentMode = "live" | "mock";
 export interface AgentReply {
   content: string;
   mode: AgentMode;
+  /** True when the agent created, edited, or deleted a record this turn —
+   *  the UI uses it to refresh dashboard views. */
+  mutated?: boolean;
 }
 
 export const AGENT_MODEL_LABEL = "Groq · Llama 3.3 70B";
@@ -42,7 +45,7 @@ export async function askAgent(history: ChatMessage[], ctx: AgentContext): Promi
     });
     if (!res.ok) throw new Error(`API ${res.status}`);
     const data = (await res.json()) as AgentReply;
-    return { content: data.content, mode: data.mode ?? "mock" };
+    return { content: data.content, mode: data.mode ?? "mock", mutated: data.mutated };
   } catch {
     const question = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
     return { content: mockBrain(question, ctx), mode: "mock" };

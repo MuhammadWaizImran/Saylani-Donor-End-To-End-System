@@ -10,12 +10,12 @@ import {
   ChevronsRight,
   FilePlus2,
   GraduationCap,
-  Home,
   LayoutDashboard,
   LogOut,
   Menu,
   School,
   Sparkles,
+  Star,
   Users,
   X,
 } from "lucide-react";
@@ -40,6 +40,7 @@ const navByRole: Record<UserRole, NavItem[]> = {
     { href: "/portal/admin/courses", label: "Courses", icon: School },
     { href: "/portal/admin/classes", label: "Active Classes", icon: CalendarClock },
     { href: "/portal/admin/jobs", label: "Jobs Secured", icon: Briefcase },
+    { href: "/portal/admin/success-stories", label: "Success Stories", icon: Star },
     { href: "/portal/admin/data-entry", label: "Data Entry", icon: FilePlus2 },
     { href: "/portal/admin/assistant", label: "AI Assistant", icon: Sparkles },
   ],
@@ -112,6 +113,9 @@ function PortalChrome({
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const nav = navByRole[session.role];
+  // The AI assistant fills the whole viewport instead of sitting in a
+  // padded, card-bounded page — everything else keeps the normal page layout.
+  const isFullBleed = pathname.endsWith("/assistant");
 
   const onLogout = async () => {
     await logout();
@@ -132,8 +136,8 @@ function PortalChrome({
             className={cn(
               "group relative flex items-center gap-3 overflow-hidden rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200",
               active
-                ? "bg-gradient-to-r from-brand-50 to-accent-50/70 text-brand-800 shadow-[0_0_0_1px_rgba(11,115,183,0.14),0_4px_14px_-4px_rgba(11,115,183,0.35)]"
-                : "text-[#6F6F6F] hover:translate-x-0.5 hover:bg-surface-muted hover:text-black",
+                ? "bg-white text-brand-800 shadow-[0_0_0_1px_rgba(11,115,183,0.14),0_6px_16px_-4px_rgba(11,115,183,0.4)]"
+                : "text-brand-900/70 hover:translate-x-0.5 hover:bg-white/60 hover:text-brand-900",
             )}
           >
             {active && (
@@ -160,10 +164,10 @@ function PortalChrome({
   );
 
   return (
-    <div className="mx-auto flex min-h-[calc(100svh-72px)] w-full max-w-[1400px]">
+    <div className={cn("mx-auto flex min-h-svh w-full", isFullBleed ? "max-w-none" : "max-w-[1400px]")}>
       {/* Desktop sidebar — expanded */}
       {sidebarOpen ? (
-        <aside className="sticky top-[72px] hidden h-[calc(100svh-72px)] w-64 shrink-0 flex-col border-r border-edge bg-gradient-to-b from-white via-white to-brand-50/30 px-4 py-6 lg:flex">
+        <aside className="sticky top-0 hidden h-svh w-64 shrink-0 flex-col bg-gradient-to-br from-brand-100 via-brand-50 to-accent-100 px-4 py-6 shadow-[14px_0_36px_-22px_rgba(11,115,183,0.55)] lg:flex">
           <div className="mb-4 flex items-center justify-between px-1">
             <p className="px-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-accent-600">
               {session.role} portal
@@ -180,13 +184,6 @@ function PortalChrome({
           </div>
           {navLinks}
           <div className="mt-auto space-y-1 border-t border-edge pt-4">
-            <Link
-              href="/"
-              className="flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-[#6F6F6F] hover:bg-surface-muted hover:text-black"
-            >
-              <Home className="h-4 w-4" aria-hidden />
-              Back to website
-            </Link>
             <button
               type="button"
               onClick={onLogout}
@@ -199,7 +196,7 @@ function PortalChrome({
         </aside>
       ) : (
         /* Desktop sidebar — collapsed icon strip */
-        <aside className="sticky top-[72px] hidden h-[calc(100svh-72px)] w-14 shrink-0 flex-col items-center border-r border-edge bg-white py-4 lg:flex">
+        <aside className="sticky top-0 hidden h-svh w-14 shrink-0 flex-col items-center bg-gradient-to-br from-brand-100 to-accent-100 py-4 shadow-[14px_0_36px_-22px_rgba(11,115,183,0.55)] lg:flex">
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
@@ -233,14 +230,6 @@ function PortalChrome({
             })}
           </nav>
           <div className="mt-auto flex flex-col items-center gap-1 border-t border-edge pt-3">
-            <Link
-              href="/"
-              aria-label="Back to website"
-              title="Back to website"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-[#6F6F6F] hover:bg-surface-muted hover:text-black"
-            >
-              <Home className="h-4 w-4" aria-hidden />
-            </Link>
             <button
               type="button"
               onClick={onLogout}
@@ -254,9 +243,9 @@ function PortalChrome({
         </aside>
       )}
 
-      <div className="min-w-0 flex-1">
+      <div className="flex min-h-svh min-w-0 flex-1 flex-col bg-gradient-to-r from-brand-100/40 via-transparent via-30% to-transparent">
         {/* Portal topbar */}
-        <div className="flex items-center justify-between gap-3 border-b border-edge bg-white px-5 py-3.5">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-brand-100 bg-gradient-to-r from-brand-50 via-white to-accent-50 px-5 py-3.5">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -284,19 +273,13 @@ function PortalChrome({
 
         {/* Mobile nav drawer */}
         {menuOpen && (
-          <div className="border-b border-edge bg-white px-4 py-4 lg:hidden">
+          <div className="border-b border-brand-100 bg-gradient-to-b from-brand-50 to-accent-50 px-4 py-4 lg:hidden">
             {navLinks}
-            <div className="mt-3 flex items-center gap-2 border-t border-edge pt-3">
-              <Link
-                href="/"
-                className="flex-1 rounded-xl px-3.5 py-2.5 text-center text-sm font-semibold text-[#6F6F6F] hover:bg-surface-muted"
-              >
-                Back to website
-              </Link>
+            <div className="mt-3 border-t border-edge pt-3">
               <button
                 type="button"
                 onClick={onLogout}
-                className="flex-1 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50"
+                className="w-full rounded-xl px-3.5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50"
               >
                 Log out
               </button>
@@ -304,7 +287,9 @@ function PortalChrome({
           </div>
         )}
 
-        <main className="px-5 py-8 sm:px-8">{children}</main>
+        <main className={cn("flex-1", isFullBleed ? "flex min-h-0 flex-col" : "px-5 py-8 sm:px-8")}>
+          {children}
+        </main>
       </div>
     </div>
   );

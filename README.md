@@ -1,63 +1,79 @@
-# SMIT Donations — Frontend
+# SMIT Portal
 
-A production-quality, frontend-only donation platform for **SMIT (Saylani Mass IT Training)**, built with Next.js App Router. All data is mocked behind an API-shaped data layer so a real backend can be swapped in later without touching UI components.
+A role-based management dashboard for **SMIT (Saylani Mass IT Training)** — campuses, students, trainers, courses, and an AI operations assistant, backed by a single MongoDB database. There is no public website; the app opens straight to login.
 
 ## Tech stack
 
 - **Next.js 16** (App Router, Turbopack, React Compiler) + **React 19** + **TypeScript**
-- **Tailwind CSS v4** — green & white editorial theme (Instrument Serif display + Inter body), light mode only
-- **Cinematic video backgrounds** (`public/media/*.mp4`) with seamless rAF fade-loop (`components/media/video-background.tsx`)
-- **React Three Fiber + drei** — 3D particle overlay on the hero, plus a pulsing heart/globe scene in the Mission section
-- **Framer Motion** — fade-rise entrances, scroll reveals, animated progress bars/counters, wizard transitions, confetti
-- **lucide-react** icons (+ inline SVG brand/social icons)
+- **MongoDB** (official `mongodb` driver) — the single data backend
+- **Auth** — custom JWT sessions (`jose`, HS256, httpOnly cookie) + `bcryptjs`; no third-party auth provider
+- **AI** — Groq (`gpt-oss-120b` → `llama-3.3-70b-versatile` fallback) tool-calling agent with role-scoped read/write tools
+- **Voice** — ElevenLabs TTS (optional) + browser Web Speech STT
+- **Documents** — `docx` reports generated on demand, stored in MongoDB GridFS
+- **Tailwind CSS v4** — SMIT blue + green theme, light mode only
+- **Framer Motion**, **lucide-react**
 
 ## Getting started
 
 ```bash
 npm install
-npm run dev      # http://localhost:3000
-npm run build    # production build
+npm run dev            # http://localhost:3000 (redirects to /auth/login)
+npm run build           # production build
 npm run lint
+npm run db:indexes      # ensure MongoDB indexes (safe to re-run)
+npm run seed:test-admin # create a known-password admin account for local testing
+npm run e2e             # smoke test: login per role + list counts
 ```
 
-## Pages
+Required environment variables (`.env.local`, gitignored) — see `.env.example`:
 
-| Route | Description |
+| Variable | Purpose |
 | --- | --- |
-| `/` | Fullscreen video hero + 3D particles, live stats bar, donation ticker, featured campaigns, 3D mission section, fullscreen impact-video section, trust pillars, testimonials |
-| `/campaigns` | Grid with search + category/urgency/location filters (`?status=urgent` deep-links) |
-| `/campaigns/[id]` | Story, gallery, animated progress, amount selector, recent donors, share buttons |
-| `/donate` | 4-step wizard: amount → donor details → payment method (JazzCash/Easypaisa/bank/card UI) → animated confirmation |
-| `/about` | Mission, impact stats, timeline, team, certifications/trust badges |
-| `/dashboard` | Mock donor dashboard: history table, receipt buttons, saved payment methods |
-| `/contact` | Validated contact form, WhatsApp/phone/email links, embedded map |
+| `MONGODB_URI` | MongoDB connection string (expanded non-SRV form) |
+| `AUTH_JWT_SECRET` | Signs session cookies |
+| `GROQ_API_KEY`, `GROQ_API_KEY_2` | AI assistant, with failover |
+| `ELEVENLABS_API_KEY` | Optional — voice replies; falls back to the browser's built-in voice without it |
+
+## Routes
+
+| Area | Routes |
+| --- | --- |
+| Auth | `/auth/login` (3 role tabs), `/auth/signup` (donor only) |
+| Admin | `/portal/admin` and its campuses/students/trainers/courses/classes/jobs/success-stories/data-entry/assistant subpages |
+| Trainer | `/portal/trainer`, `/portal/trainer/assistant` (scoped to the signed-in trainer only) |
+| Donor | `/portal/donor` (read-only org impact view) |
+| API | `/api/auth/*`, `/api/chat`, `/api/portal/trainer`, `/api/admin/records`, `/api/reports/[id]`, `/api/voice/tts` |
 
 ## Project structure
 
 ```
-app/                  # Routes (App Router)
-components/
-  layout/             # Header (sticky, mobile menu), footer, newsletter form
-  home/               # Hero, stats bar, ticker, trust, testimonials
-  campaigns/          # Card, explorer (filters), gallery, donation panel, donors, share
-  donate/             # 4-step donation wizard
-  three/              # R3F hero scene + quality-degrading loader
-  ui/                 # Logo, badges, progress bar, counter, theme toggle, skeletons
+app/                    # Routes (App Router) — all behind /auth or /portal
+components/portal/      # Portal shell, AI assistant, data-entry forms, shared UI
 lib/
-  api.ts              # ★ Data layer — swap these functions for real API calls later
-  mock-data/          # Campaigns, donations, donors, testimonials, team
-  utils.ts            # Currency (PKR), percent, time-ago helpers
-types/                # Shared TypeScript interfaces (Campaign, Donation, Donor…)
+  management-api.ts     # ★ Single data-access layer for campuses/students/trainers/courses/classes
+  mongodb.ts            # Connection singleton
+  auth.ts / auth-server.ts / auth-jwt.ts   # Session issuing/verification
+  ai/tools.ts           # AI agent's read + write tools (role-gated server-side)
+  ai/report.ts          # Word report generation → GridFS
+scripts/                # auth-seed, seed-test-admin, ensure-indexes, e2e-test
 ```
 
-## Backend swap plan
+## Data model
 
-Every component gets data through the async functions in `lib/api.ts` (`getCampaigns()`, `getCampaign(id)`, `getDonations(campaignId)`, `getSiteStats()`, …). To connect a real backend/Supabase, replace only those function bodies — signatures and types are already API-shaped.
+Training data lives in ~47 MongoDB collections. Two hubs almost everything else references:
 
-## Notes
+- **`student_inductions`** — one enrolment (campus, course, trainer, slot, status); a UI "student" = this joined to `students` (personal info).
+- **`slots`** — one running class (trainer, campus, capacity, schedule).
 
-- **No real payments** — the payment step is UI only; the confirmation screen says so explicitly.
-- **Performance** — 3D layers lazy-load client-side only, drop particle count/DPR on mobile, and are skipped entirely under `prefers-reduced-motion`.
-- **Theming** — white-only, green accents (`brand-*` deep greens, `accent-*` bright greens in `globals.css`). Dark mode was removed by request.
-- **Media** — real photos/videos live in `public/media/` (sourced from the project's "videos and images" folder).
-- **Accessibility** — semantic landmarks, skip link, labeled forms with inline validation, `aria` on progress bars/steps, keyboard-reachable controls.
+Names are stored bilingually (`en`/`ur`) and resolved through short-lived cached lookup maps.
+
+## Known limits
+
+- No placement/salary data exists in the source system — the Jobs page reflects that honestly rather than fabricating numbers.
+- Progress/attendance are derived from enrolment status, not tracked per-student percentages.
+- Voice replies are premium-quality only once `ELEVENLABS_API_KEY` is set.
+
+## Security notes
+
+- Roles/identity always come from the verified session cookie, never the client.
+- Any credential ever pasted into a chat/log (DB passwords, API keys) should be rotated before relying on this build in production.

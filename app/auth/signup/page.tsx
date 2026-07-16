@@ -4,24 +4,15 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { HandCoins, ShieldCheck, UserPlus } from "lucide-react";
-import type { UserRole } from "@/types/management";
+import { HandCoins, UserPlus } from "lucide-react";
 import { signUp } from "@/lib/auth";
-import { cn } from "@/lib/utils";
-
-const roles: Array<{ id: Extract<UserRole, "admin" | "donor">; label: string; icon: typeof ShieldCheck; blurb: string }> = [
-  { id: "donor", label: "Donor", icon: HandCoins, blurb: "Track the impact of your giving across every campus." },
-  { id: "admin", label: "Admin", icon: ShieldCheck, blurb: "Manage campuses, students, trainers, and placements." },
-];
 
 export default function SignupPage() {
   const router = useRouter();
-  const [role, setRole] = useState<"admin" | "donor">("donor");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [adminCode, setAdminCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,12 +34,8 @@ export default function SignupPage() {
       setError("Passwords do not match.");
       return;
     }
-    if (role === "admin" && adminCode.trim().length === 0) {
-      setError("Admin signups need the invite code.");
-      return;
-    }
     setBusy(true);
-    const result = await signUp({ name, email, password, role, adminCode });
+    const result = await signUp({ name, email, password, role: "donor" });
     setBusy(false);
     if (!result.ok) {
       setError(result.error);
@@ -68,37 +55,14 @@ export default function SignupPage() {
           Saylani portal
         </p>
         <h1 className="text-center font-display text-4xl tracking-tight text-black sm:text-5xl">
-          Create your <em className="text-[#6F6F6F]">account</em>
+          Create your <em className="text-[#6F6F6F]">donor account</em>
         </h1>
+        <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-sm text-[#6F6F6F]">
+          <HandCoins className="h-4 w-4 text-brand-600" aria-hidden />
+          Track the impact of your giving across every campus.
+        </p>
 
-        {/* Role selector */}
-        <div role="radiogroup" aria-label="Account type" className="mt-8 grid grid-cols-2 gap-3">
-          {roles.map(({ id, label, icon: Icon, blurb }) => (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={role === id}
-              onClick={() => {
-                setRole(id);
-                setError(null);
-              }}
-              className={cn(
-                "rounded-2xl border-2 p-4 text-left transition-colors",
-                role === id ? "border-brand-600 bg-brand-50" : "border-edge hover:border-brand-300",
-              )}
-            >
-              <Icon
-                className={cn("h-5 w-5", role === id ? "text-brand-700" : "text-ink-muted")}
-                aria-hidden
-              />
-              <span className="mt-2 block text-sm font-bold text-ink">{label}</span>
-              <span className="mt-1 block text-xs leading-relaxed text-ink-muted">{blurb}</span>
-            </button>
-          ))}
-        </div>
-
-        <form onSubmit={onSubmit} noValidate className="mt-6 space-y-4">
+        <form onSubmit={onSubmit} noValidate className="mt-8 space-y-4">
           <div>
             <label htmlFor="signup-name" className="block text-sm font-bold text-ink">
               Full name
@@ -158,22 +122,6 @@ export default function SignupPage() {
             </div>
           </div>
 
-          {role === "admin" && (
-            <div>
-              <label htmlFor="signup-admin-code" className="block text-sm font-bold text-ink">
-                Admin invite code
-              </label>
-              <input
-                id="signup-admin-code"
-                type="password"
-                value={adminCode}
-                onChange={(e) => setAdminCode(e.target.value)}
-                placeholder="Provided by an existing admin"
-                className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
-              />
-            </div>
-          )}
-
           {error && (
             <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
               {error}
@@ -186,7 +134,7 @@ export default function SignupPage() {
             className="flex w-full items-center justify-center gap-2 rounded-full bg-brand-700 px-6 py-3.5 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-60"
           >
             <UserPlus className="h-4 w-4 text-accent-400" aria-hidden />
-            {busy ? "Creating account…" : `Create ${role} account`}
+            {busy ? "Creating account…" : "Create donor account"}
           </button>
         </form>
 

@@ -2,7 +2,7 @@
  * Client-safe, synchronous reads over the bundled mock data.
  *
  * Used ONLY as the offline fallback (mock-brain, network-failure paths).
- * Live code uses lib/management-api.ts, which queries Supabase.
+ * Live code uses lib/management-api.ts, which queries MongoDB.
  */
 import type {
   ActiveClass,

@@ -15,27 +15,8 @@ import {
   TextRun,
   WidthType,
 } from "docx";
-import { supabaseServer } from "@/lib/supabase";
-
-const REPORTS_BUCKET = "ai-reports";
-const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24; // 24 hours
-
-let bucketReady: Promise<void> | null = null;
-
-/** Create the reports bucket once per server lifetime (idempotent). */
-function ensureBucket(): Promise<void> {
-  if (!bucketReady) {
-    bucketReady = (async () => {
-      const { error } = await supabaseServer().storage.createBucket(REPORTS_BUCKET, {
-        public: false,
-        fileSizeLimit: "10MB",
-      });
-      // "already exists" is expected on every call after the first — ignore it.
-      if (error && !/already exists/i.test(error.message)) throw new Error(error.message);
-    })();
-  }
-  return bucketReady;
-}
+import { GridFSBucket } from "mongodb";
+import { mongo } from "@/lib/mongodb";
 
 const slugify = (text: string) =>
   text
@@ -44,26 +25,26 @@ const slugify = (text: string) =>
     .replace(/^-|-$/g, "")
     .slice(0, 60) || "report";
 
-/** Uploads a generated .docx and returns a time-limited download link. */
+/** Stores a generated .docx in MongoDB GridFS and returns a download link
+ *  served by /api/reports/[id] (session-gated). */
 export async function uploadWordReport(
   buffer: Buffer,
   title: string,
 ): Promise<{ url: string; filename: string }> {
-  await ensureBucket();
   const filename = `${slugify(title)}-${Date.now()}.docx`;
-  const db = supabaseServer();
-  const { error: uploadError } = await db.storage.from(REPORTS_BUCKET).upload(filename, buffer, {
-    contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    upsert: false,
+  const db = await mongo();
+  const bucket = new GridFSBucket(db, { bucketName: "reports" });
+
+  const id = await new Promise<string>((resolve, reject) => {
+    const stream = bucket.openUploadStream(filename, {
+      metadata: { contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+    });
+    stream.on("error", reject);
+    stream.on("finish", () => resolve(String(stream.id)));
+    stream.end(buffer);
   });
-  if (uploadError) throw new Error(uploadError.message);
 
-  const { data, error: signError } = await db.storage
-    .from(REPORTS_BUCKET)
-    .createSignedUrl(filename, SIGNED_URL_TTL_SECONDS, { download: filename });
-  if (signError || !data) throw new Error(signError?.message ?? "Could not create download link");
-
-  return { url: data.signedUrl, filename };
+  return { url: `/api/reports/${id}`, filename };
 }
 
 const BRAND_BLUE = "0B73B7";
