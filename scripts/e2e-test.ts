@@ -76,7 +76,8 @@ async function main() {
 
   try {
     console.log("— Public pages —");
-    for (const path of ["/", "/campaigns", "/donate", "/contact", "/auth/login", "/auth/signup", "/nope-404"]) {
+    // Dashboard-only portal — the old public site (/campaigns, /donate, …) is gone.
+    for (const path of ["/", "/auth/login", "/auth/signup", "/nope-404"]) {
       const res = await fetch(`${BASE}${path}`);
       const want = path === "/nope-404" ? 404 : 200;
       check(`GET ${path} → ${want}`, res.status === want, `got ${res.status}`);

@@ -29,7 +29,7 @@ export default async function CoursesPage({
       <PortalHeading
         title="Courses,"
         accent="running across Pakistan"
-        description="Every course with its campus, status, trainer, enrollment, and completion progress."
+        description="Every course offering with its campus, status, trainer, enrollment, and duration."
       />
       <CoursesTable courses={enriched} total={result.total} page={result.page} pageSize={result.pageSize} />
     </>

@@ -1,7 +1,7 @@
 "use client";
 
 import type { Course, CourseStatus } from "@/types/management";
-import { MiniProgress, Pill, TableShell, Td, Th } from "@/components/portal/ui";
+import { Pill, TableShell, Td, Th } from "@/components/portal/ui";
 import {
   PaginationBar,
   ResultsCount,
@@ -77,7 +77,6 @@ export function CoursesTable({
             <Th>Trainer</Th>
             <Th>Enrolled</Th>
             <Th>Duration</Th>
-            <Th>Progress</Th>
           </tr>
         </thead>
         <tbody className={cn("divide-y divide-edge", isPending && "opacity-50")}>
@@ -93,15 +92,12 @@ export function CoursesTable({
               </Td>
               <Td className="text-ink-muted">{c.trainerName}</Td>
               <Td className="font-semibold text-ink">{c.enrolledCount}</Td>
-              <Td className="text-ink-muted">{c.durationMonths} months</Td>
-              <Td>
-                <MiniProgress percent={c.progressPercent} />
-              </Td>
+              <Td className="text-ink-muted">{c.durationMonths > 0 ? `${c.durationMonths} months` : "—"}</Td>
             </tr>
           ))}
           {courses.length === 0 && (
             <tr>
-              <td colSpan={7} className="px-4 py-12 text-center text-ink-muted">
+              <td colSpan={6} className="px-4 py-12 text-center text-ink-muted">
                 No courses match your search.
               </td>
             </tr>

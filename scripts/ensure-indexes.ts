@@ -40,6 +40,12 @@ const PLAN: Record<string, Array<Record<string, 1 | -1>>> = {
   // Campus list resolves its city; trainers filtered by campus.
   campus: [{ city: 1 }],
   trainers: [{ campus: 1 }],
+  // Attendance pages: grouped by student/trainer, trainer rows filter out "deleted".
+  attendances: [{ student_id: 1 }],
+  trainer_attendances: [{ trainer: 1 }, { status: 1 }],
+  // Fee payments: joined to students; donations listed newest-first.
+  payments: [{ student: 1 }, { status: 1 }],
+  donations: [{ createdAt: -1 }],
 };
 
 async function main() {

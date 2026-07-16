@@ -10,6 +10,7 @@
     "auth:seed": "tsx scripts/auth-seed.ts",
     "seed:test-admin": "tsx scripts/seed-test-admin.ts",
     "db:indexes": "tsx --env-file=.env.local scripts/ensure-indexes.ts",
+    "verify:data": "tsx --env-file=.env.local scripts/verify-data.ts",
     "e2e": "tsx --env-file=.env.local scripts/e2e-test.ts"
   },
   "dependencies": {

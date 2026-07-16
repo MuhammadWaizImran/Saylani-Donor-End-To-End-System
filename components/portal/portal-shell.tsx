@@ -4,16 +4,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Briefcase,
   Building2,
   CalendarCheck,
   CalendarClock,
   ChevronsRight,
   FilePlus2,
   GraduationCap,
+  HandCoins,
   LayoutDashboard,
   LogOut,
   Menu,
+  Receipt,
   School,
   Sparkles,
   Star,
@@ -41,7 +42,8 @@ const navByRole: Record<UserRole, NavItem[]> = {
     { href: "/portal/admin/courses", label: "Courses", icon: School },
     { href: "/portal/admin/classes", label: "Active Classes", icon: CalendarClock },
     { href: "/portal/admin/attendance", label: "Attendance", icon: CalendarCheck },
-    { href: "/portal/admin/jobs", label: "Jobs Secured", icon: Briefcase },
+    { href: "/portal/admin/donations", label: "Donations", icon: HandCoins },
+    { href: "/portal/admin/payments", label: "Fee Payments", icon: Receipt },
     { href: "/portal/admin/success-stories", label: "Success Stories", icon: Star },
     { href: "/portal/admin/data-entry", label: "Data Entry", icon: FilePlus2 },
     { href: "/portal/admin/assistant", label: "AI Assistant", icon: Sparkles },

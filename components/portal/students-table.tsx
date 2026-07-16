@@ -1,7 +1,7 @@
 "use client";
 
 import type { Student } from "@/types/management";
-import { Avatar, MiniProgress, Pill, TableShell, Td, Th } from "@/components/portal/ui";
+import { Avatar, Pill, TableShell, Td, Th } from "@/components/portal/ui";
 import {
   PaginationBar,
   ResultsCount,
@@ -9,7 +9,7 @@ import {
   useDebouncedSearch,
   useListParams,
 } from "@/components/portal/list-toolbar";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export interface EnrichedStudent extends Student {
   campusName: string;
@@ -49,7 +49,7 @@ export function StudentsTable({
           value={search.value}
           onChange={search.onChange}
           label="Search students"
-          placeholder="Search by name, roll no. (email), or company…"
+          placeholder="Search by name, email, or phone…"
         />
         <div className="flex flex-wrap gap-3">
           <label htmlFor="filter-campus" className="sr-only">Filter by campus</label>
@@ -75,24 +75,12 @@ export function StudentsTable({
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
           </select>
-          <label htmlFor="filter-placement" className="sr-only">Filter by placement</label>
-          <select
-            id="filter-placement"
-            value={searchParams.get("placement") ?? ""}
-            onChange={(e) => setParams({ placement: e.target.value, page: "" })}
-            className={selectClass}
-          >
-            <option value="">Any placement</option>
-            <option value="placed">Placed</option>
-            <option value="seeking">Seeking job</option>
-            <option value="studying">Studying</option>
-          </select>
         </div>
       </div>
 
       <ResultsCount isPending={isPending} total={total} page={page} pageSize={pageSize} noun="student profiles" />
 
-      <TableShell minWidth={980}>
+      <TableShell minWidth={860}>
         <thead>
           <tr className="border-b border-edge bg-surface-muted">
             <Th>Student</Th>
@@ -100,9 +88,6 @@ export function StudentsTable({
             <Th>Course</Th>
             <Th>Trainer</Th>
             <Th>Status</Th>
-            <Th>Progress</Th>
-            <Th>Attendance</Th>
-            <Th>Placement</Th>
           </tr>
         </thead>
         <tbody className={cn("divide-y divide-edge", isPending && "opacity-50")}>
@@ -126,30 +111,11 @@ export function StudentsTable({
                   {s.enrollmentStatus === "active" ? "Active" : "Inactive"}
                 </Pill>
               </Td>
-              <Td>
-                <MiniProgress percent={s.progressPercent} />
-              </Td>
-              <Td>
-                <span className="font-semibold text-ink">{s.attendancePercent}%</span>
-              </Td>
-              <Td>
-                {s.placementStatus === "placed" ? (
-                  <div>
-                    <Pill tone="dark">Placed</Pill>
-                    <p className="mt-1 text-xs font-semibold text-ink">{s.company}</p>
-                    <p className="text-xs text-brand-700">{formatCurrency(s.salary ?? 0)}/mo</p>
-                  </div>
-                ) : s.placementStatus === "seeking" ? (
-                  <Pill tone="amber">Seeking job</Pill>
-                ) : (
-                  <Pill tone="gray">Studying</Pill>
-                )}
-              </Td>
             </tr>
           ))}
           {students.length === 0 && (
             <tr>
-              <td colSpan={8} className="px-4 py-12 text-center text-ink-muted">
+              <td colSpan={5} className="px-4 py-12 text-center text-ink-muted">
                 No students match your filters.
               </td>
             </tr>

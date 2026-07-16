@@ -601,6 +601,12 @@ export async function executeTool(
         monthly_salary_pkr: s.salary,
         placement_date: s.placementDate,
       }));
+      if (rows.length === 0) {
+        return JSON.stringify({
+          rows: [],
+          note: "Job placements are not tracked in the training system's database yet, so there is no placement data to report. Do not estimate or invent placement figures.",
+        });
+      }
       if (total <= rows.length) return JSON.stringify(rows);
       return JSON.stringify({
         total_matching: total,

@@ -19,10 +19,15 @@ import type {
   ActiveClass,
   AttendanceOverview,
   Campus,
+  CampaignStatus,
   Course,
+  DonationOverview,
   OrgStats,
+  PaymentOverview,
+  PaymentStatus,
   Student,
   Trainer,
+  TrainerAttendanceOverview,
 } from "@/types/management";
 import { isMongoConfigured, mongo } from "@/lib/mongodb";
 import * as mock from "@/lib/management-mock";
@@ -76,6 +81,8 @@ interface NameMaps {
   cityName: Record<string, string>;
   campusName: Record<string, string>;
   courseName: Record<string, string>;
+  /** e.g. "2 months" — the catalog's own duration text. */
+  courseDuration: Record<string, string>;
   trainerName: Record<string, string>;
   newCourseToCourse: Record<string, string>;
 }
@@ -97,6 +104,7 @@ async function nameMaps(): Promise<NameMaps> {
     cityName: Object.fromEntries(cities.map((c) => [s(c._id), s(c.en?.city_name)])),
     campusName: Object.fromEntries(campuses.map((c) => [s(c._id), s(c.en?.campus_name)])),
     courseName: Object.fromEntries(courses.map((c) => [s(c._id), s(c.en?.course_name)])),
+    courseDuration: Object.fromEntries(courses.map((c) => [s(c._id), s(c.en?.course_duration)])),
     trainerName: Object.fromEntries(trainers.map((t) => [s(t._id), s(t.en?.trainer_name)])),
     newCourseToCourse: Object.fromEntries(newCourses.map((nc) => [s(nc._id), s(nc.course)])),
   };
@@ -420,6 +428,201 @@ export function getAttendanceOverview(): Promise<AttendanceOverview> {
   );
 }
 
+/**
+ * Trainer check-in attendance, from the `trainer_attendances` collection
+ * (check_in/check_out timestamps + a punctuality/approval workflow). We roll
+ * each trainer's non-deleted sessions into one row: how many check-ins, total
+ * minutes present, and how many of those were flagged late. Trainer names are
+ * resolved by the page via resolveNames(), so we only return ids here — this
+ * sidesteps the string-vs-ObjectId mismatch between the `trainer` ref and the
+ * trainers `_id`.
+ */
+export function getTrainerAttendanceOverview(): Promise<TrainerAttendanceOverview> {
+  return live(
+    () => ({ records: [], trainersTracked: 0, totalTrainers: 0, totalSessions: 0, totalMinutes: 0 }),
+    async () => {
+      const db = await mongo();
+      const [rows, totalTrainers] = await Promise.all([
+        db
+          .collection("trainer_attendances")
+          .aggregate([
+            { $match: { status: { $ne: "deleted" } } },
+            {
+              $group: {
+                _id: "$trainer",
+                sessions: { $sum: 1 },
+                totalMinutes: { $sum: { $ifNull: ["$minutes", 0] } },
+                lateSessions: {
+                  $sum: {
+                    $cond: [{ $gt: [{ $ifNull: ["$late_check_in_minutes", 0] }, 0] }, 1, 0],
+                  },
+                },
+                lastCheckIn: { $max: "$check_in" },
+              },
+            },
+            { $sort: { sessions: -1 } },
+          ])
+          .toArray(),
+        db.collection("trainers").countDocuments(),
+      ]);
+      const records = rows.map((r) => ({
+        trainerId: s(r._id),
+        name: "", // resolved by the page via resolveNames("trainers", …)
+        sessions: n(r.sessions),
+        totalMinutes: n(r.totalMinutes),
+        lateSessions: n(r.lateSessions),
+        lastCheckIn: s(r.lastCheckIn),
+      }));
+      const totalSessions = records.reduce((sum, r) => sum + r.sessions, 0);
+      const totalMinutes = records.reduce((sum, r) => sum + r.totalMinutes, 0);
+      return { records, trainersTracked: records.length, totalTrainers, totalSessions, totalMinutes };
+    },
+  );
+}
+
+/* ── fundraising: campaigns / donations / donors ───────────────
+ * Reads the `campaigns`, `donations`, and `public_donors` collections
+ * (all camelCase, string-id documents). Campaign titles are joined onto
+ * each donation in memory. Bounded lists for the tables; true counts for
+ * the summary cards. */
+export function getDonationOverview(): Promise<DonationOverview> {
+  return live(
+    () => ({
+      campaigns: [],
+      donations: [],
+      donors: [],
+      totalRaised: 0,
+      totalDonations: 0,
+      activeCampaigns: 0,
+      totalDonors: 0,
+    }),
+    async () => {
+      const db = await mongo();
+      const [campaignDocs, donationDocs, donorDocs, totalDonations, totalDonors] = await Promise.all([
+        db.collection("campaigns").find({}).toArray(),
+        db.collection("donations").find({}).sort({ createdAt: -1 }).limit(25).toArray(),
+        db.collection("public_donors").find({}).sort({ totalDonated: -1 }).limit(10).toArray(),
+        db.collection("donations").countDocuments(),
+        db.collection("public_donors").countDocuments(),
+      ]);
+
+      const titleById = new Map(campaignDocs.map((c) => [s(c.id ?? c._id), s(c.title)]));
+      const campaigns = campaignDocs
+        .map((c) => ({
+          id: s(c.id ?? c._id),
+          title: s(c.title) || "—",
+          category: s(c.category),
+          location: s(c.location),
+          goalAmount: n(c.goalAmount),
+          raisedAmount: n(c.raisedAmount),
+          donorCount: n(c.donorCount),
+          currency: s(c.currency) || "PKR",
+          status: (s(c.status) || "active") as CampaignStatus,
+          endsAt: s(c.endsAt),
+        }))
+        .sort((a, b) => b.raisedAmount - a.raisedAmount);
+
+      const donations = donationDocs.map((d) => ({
+        id: s(d.id ?? d._id),
+        campaignId: s(d.campaignId),
+        campaignTitle: titleById.get(s(d.campaignId)) ?? "—",
+        donorName: d.isAnonymous ? "Anonymous" : s(d.donorName) || "—",
+        amount: n(d.amount),
+        currency: s(d.currency) || "PKR",
+        isAnonymous: Boolean(d.isAnonymous),
+        message: d.message ? s(d.message) : undefined,
+        createdAt: s(d.createdAt),
+      }));
+
+      const donors = donorDocs.map((u) => ({
+        id: s(u.id ?? u._id),
+        name: s(u.name) || "—",
+        email: s(u.email),
+        totalDonated: n(u.totalDonated),
+        donationCount: n(u.donationCount),
+        memberSince: s(u.memberSince),
+      }));
+
+      const totalRaised = campaigns.reduce((sum, c) => sum + c.raisedAmount, 0);
+      const activeCampaigns = campaigns.filter((c) => c.status !== "completed").length;
+      return { campaigns, donations, donors, totalRaised, totalDonations, activeCampaigns, totalDonors };
+    },
+  );
+}
+
+/* ── student fee payments ──────────────────────────────────────
+ * Reads the `payments` collection (Blinq/1Bill invoices). The `status`
+ * field is dirty in the real data ("paid", "paida", "pa\naid", "pending"),
+ * so we normalise it: anything starting "pen" is pending, anything starting
+ * "pa" is paid, else pending (conservative — never inflates "collected").
+ * Only 106 docs, so we fetch all, compute exact totals, and slice for the
+ * table — cheaper and more correct than aggregating over the messy field. */
+function normalizePaymentStatus(raw: string): PaymentStatus {
+  const v = raw.replace(/\s/g, "").toLowerCase();
+  if (v.startsWith("pen")) return "pending";
+  if (v.startsWith("pa")) return "paid";
+  return "pending";
+}
+
+/** "2501" → "Jan 2025". Leaves anything unexpected untouched. */
+function formatBillingMonth(ym: string): string {
+  if (!/^\d{4}$/.test(ym)) return ym || "—";
+  const months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const mm = Number(ym.slice(2));
+  return `${months[mm] ?? mm} 20${ym.slice(0, 2)}`;
+}
+
+export function getPaymentOverview(): Promise<PaymentOverview> {
+  return live(
+    () => ({
+      payments: [],
+      totalCollected: 0,
+      totalPending: 0,
+      paidCount: 0,
+      pendingCount: 0,
+      totalInvoices: 0,
+    }),
+    async () => {
+      const db = await mongo();
+      const docs = await db.collection("payments").find({}).toArray();
+
+      const studentIds = [...new Set(docs.map((d) => s(d.student)).filter(isHexId))];
+      const stu = await db
+        .collection("students")
+        .find({ _id: { $in: studentIds.map((id) => new ObjectId(id)) } })
+        .project({ full_name: 1 })
+        .toArray();
+      const nameById = new Map(stu.map((x) => [s(x._id), s(x.full_name)]));
+
+      const all = docs.map((d) => ({
+        id: s(d._id),
+        studentId: s(d.student),
+        studentName: nameById.get(s(d.student)) || "—",
+        amount: n(d.amount),
+        billingMonth: formatBillingMonth(s(d.billing_month)),
+        dueDate: s(d.due_date),
+        status: normalizePaymentStatus(s(d.status)),
+        type: s(d.type) || "—",
+        invoiceNumber: s(d.blinq_invoice_number),
+      }));
+
+      const paid = all.filter((p) => p.status === "paid");
+      const totalCollected = paid.reduce((sum, p) => sum + p.amount, 0);
+      const totalPending = all.filter((p) => p.status === "pending").reduce((sum, p) => sum + p.amount, 0);
+      const payments = [...all].sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)).slice(0, 50);
+
+      return {
+        payments,
+        totalCollected,
+        totalPending,
+        paidCount: paid.length,
+        pendingCount: all.length - paid.length,
+        totalInvoices: all.length,
+      };
+    },
+  );
+}
+
 export function getStudentsByTrainer(trainerId: string): Promise<Student[]> {
   return live(
     () => mock.getStudentsByTrainer(trainerId),
@@ -516,28 +719,38 @@ export function getTrainer(idOrEmail: string): Promise<Trainer | undefined> {
 /* ── courses (from `new_courses` offerings) ────────────────── */
 async function loadCourses(): Promise<Course[]> {
   const db = await mongo();
-  const [docs, maps, byEnrol] = await Promise.all([
+  const [docs, maps, byEnrol, bySlot] = await Promise.all([
     db.collection("new_courses").find({}).toArray(),
     nameMaps(),
     db.collection("student_inductions").aggregate([
       { $match: { new_course: { $ne: null } } },
       { $group: { _id: "$new_course", n: { $sum: 1 } } },
     ]).toArray(),
+    // A course offering's trainer isn't stored on the offering itself —
+    // it lives on the class slots teaching it.
+    db.collection("slots").aggregate([
+      { $match: { new_course: { $ne: null }, trainer: { $ne: null } } },
+      { $group: { _id: "$new_course", trainer: { $first: "$trainer" } } },
+    ]).toArray(),
   ]);
   const enrolled: Record<string, number> = {};
   for (const r of byEnrol) enrolled[s(r._id)] = n(r.n);
+  const slotTrainer: Record<string, string> = {};
+  for (const r of bySlot) slotTrainer[s(r._id)] = s(r.trainer);
   return docs.map((d) => {
     const id = s(d._id);
     const campuses = Array.isArray(d.campuses) ? d.campuses : [];
+    // "2 months" → 2; unparseable/absent stays 0 (UI shows "—").
+    const duration = parseInt(maps.courseDuration[s(d.course)] ?? "", 10);
     return {
       id,
       name: maps.courseName[s(d.course)] || `Batch ${n(d.batch_number)}`,
       campusId: campuses.length ? s(campuses[0]) : "",
-      trainerId: "",
+      trainerId: slotTrainer[id] ?? "",
       status: (d.status === true ? "running" : "completed") as Course["status"],
       enrolledCount: enrolled[id] ?? 0,
       progressPercent: 0,
-      durationMonths: 0,
+      durationMonths: Number.isFinite(duration) ? duration : 0,
       startedAt: yearOf(d.createdAt),
     };
   });

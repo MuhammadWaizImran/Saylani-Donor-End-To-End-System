@@ -3,24 +3,21 @@
 import { useEffect, useState } from "react";
 import {
   Banknote,
-  Briefcase,
   Building2,
   GraduationCap,
   Layers,
-  TrendingUp,
 } from "lucide-react";
 import type { Course, Student, Trainer } from "@/types/management";
 import { useSession } from "@/lib/auth";
 import {
   Avatar,
-  MiniProgress,
   Pill,
   StatCard,
   TableShell,
   Td,
   Th,
 } from "@/components/portal/ui";
-import { formatCompact, formatCurrency } from "@/lib/utils";
+import { formatCompact } from "@/lib/utils";
 
 interface DashboardData {
   trainer: Trainer;
@@ -67,15 +64,12 @@ export default function TrainerDashboardPage() {
 
   const { trainer, campusName, courses, students } = data;
   const activeStudents = students.filter((s) => s.enrollmentStatus === "active");
-  const placedStudents = students.filter((s) => s.placementStatus === "placed");
 
   const cards = [
     { icon: Building2, label: "Assigned campus", value: campusName },
-    { icon: GraduationCap, label: "Active students", value: String(trainer.studentCount) },
-    { icon: Layers, label: "Batches conducted", value: String(trainer.batchesCount) },
-    { icon: Briefcase, label: "Students placed", value: String(trainer.placedCount) },
-    { icon: TrendingUp, label: "Performance", value: `${trainer.performancePercent}%` },
-    { icon: Banknote, label: "Monthly salary", value: formatCompact(trainer.salary) },
+    { icon: GraduationCap, label: "Your students", value: String(trainer.studentCount) },
+    { icon: Layers, label: "Class slots", value: String(trainer.batchesCount) },
+    { icon: Banknote, label: "Hourly rate", value: formatCompact(trainer.salary) },
   ];
 
   return (
@@ -92,7 +86,7 @@ export default function TrainerDashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {cards.map((card) => (
           <StatCard key={card.label} {...card} />
         ))}
@@ -112,9 +106,9 @@ export default function TrainerDashboardPage() {
                 </Pill>
               </div>
               <p className="mt-1 text-xs text-ink-muted">
-                {c.enrolledCount} enrolled · {c.durationMonths} months · started {c.startedAt}
+                {c.enrolledCount} enrolled
+                {c.durationMonths > 0 ? ` · ${c.durationMonths} months` : ""} · started {c.startedAt}
               </p>
-              <MiniProgress percent={c.progressPercent} className="mt-3" />
             </article>
           ))}
         </div>
@@ -122,17 +116,14 @@ export default function TrainerDashboardPage() {
 
       <section aria-labelledby="trainer-students-heading" className="mt-10">
         <h2 id="trainer-students-heading" className="mb-4 font-display text-xl text-black">
-          Your students <span className="font-sans text-sm text-ink-muted">({activeStudents.length} active · {placedStudents.length} placed)</span>
+          Your students <span className="font-sans text-sm text-ink-muted">({activeStudents.length} active)</span>
         </h2>
-        <TableShell minWidth={760}>
+        <TableShell minWidth={640}>
           <thead>
             <tr className="border-b border-edge bg-surface-muted">
               <Th>Student</Th>
               <Th>Course</Th>
               <Th>Status</Th>
-              <Th>Progress</Th>
-              <Th>Attendance</Th>
-              <Th>Outcome</Th>
             </tr>
           </thead>
           <tbody className="divide-y divide-edge">
@@ -149,22 +140,6 @@ export default function TrainerDashboardPage() {
                   <Pill tone={s.enrollmentStatus === "active" ? "green" : "red"}>
                     {s.enrollmentStatus}
                   </Pill>
-                </Td>
-                <Td>
-                  <MiniProgress percent={s.progressPercent} />
-                </Td>
-                <Td className="font-semibold text-ink">{s.attendancePercent}%</Td>
-                <Td>
-                  {s.placementStatus === "placed" ? (
-                    <div>
-                      <span className="text-xs font-semibold text-ink">{s.company}</span>
-                      <span className="block text-xs font-bold text-brand-700">
-                        {formatCurrency(s.salary ?? 0)}/mo
-                      </span>
-                    </div>
-                  ) : (
-                    <span className="text-xs capitalize text-ink-muted">{s.placementStatus}</span>
-                  )}
                 </Td>
               </tr>
             ))}

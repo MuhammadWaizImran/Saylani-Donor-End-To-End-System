@@ -9,7 +9,6 @@ interface SearchParams {
   q?: string;
   campus?: string;
   status?: string;
-  placement?: string;
   page?: string;
 }
 
@@ -26,7 +25,6 @@ export default async function StudentsPage({
       query: params.q,
       campusId: params.campus,
       enrollmentStatus: params.status,
-      placementStatus: params.placement,
       page,
       pageSize: 20,
     }),
@@ -53,7 +51,7 @@ export default async function StudentsPage({
       <PortalHeading
         title="Students,"
         accent="every single story"
-        description="Profiles, campuses, courses, progress, attendance, and where each student lands after graduation."
+        description="Every enrolled student with their campus, course, trainer, and live enrolment status."
       />
       <StudentsTable
         students={enriched}

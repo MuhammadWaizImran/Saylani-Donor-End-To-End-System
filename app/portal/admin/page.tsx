@@ -1,17 +1,22 @@
 import Link from "next/link";
 import {
   ArrowRight,
-  Banknote,
-  Briefcase,
   Building2,
+  CalendarCheck,
   CalendarClock,
   GraduationCap,
+  Receipt,
   School,
-  TrendingUp,
   Users,
+  Wallet,
 } from "lucide-react";
-import { getOrgStats, getPlacedStudents, getTopCampuses, resolveNames } from "@/lib/management-api";
-import { BarList, PortalHeading, StatCard, TableShell, Td, Th, Avatar } from "@/components/portal/ui";
+import {
+  getAttendanceOverview,
+  getOrgStats,
+  getPaymentOverview,
+  getTopCampuses,
+} from "@/lib/management-api";
+import { BarList, PortalHeading, StatCard, TableShell, Td, Th, Avatar, Pill } from "@/components/portal/ui";
 import { formatCompact, formatCurrency } from "@/lib/utils";
 
 export const metadata = { title: "Admin Dashboard" };
@@ -20,18 +25,16 @@ export const dynamic = "force-dynamic";
 const TOP_CAMPUSES = 10;
 
 export default async function AdminDashboardPage() {
-  const [stats, campusPage, placed] = await Promise.all([
+  const [stats, campusPage, fees, attendance] = await Promise.all([
     getOrgStats(),
     getTopCampuses(TOP_CAMPUSES),
-    getPlacedStudents(5),
+    getPaymentOverview(),
+    getAttendanceOverview(),
   ]);
   const { campuses, total: totalCampuses } = campusPage;
   const moreCampuses = totalCampuses - campuses.length;
-  const recentPlacements = placed;
-  const [campusName, courseName] = await Promise.all([
-    resolveNames("campuses", recentPlacements.map((s) => s.campusId)),
-    resolveNames("courses", recentPlacements.map((s) => s.courseId)),
-  ]);
+  const recentPayments = fees.payments.slice(0, 5);
+  const maxStudents = Math.max(1, ...campuses.map((c) => c.studentCount));
 
   const cards = [
     { icon: Building2, label: "Total campuses", value: String(stats.totalCampuses) },
@@ -39,9 +42,9 @@ export default async function AdminDashboardPage() {
     { icon: Users, label: "Trainers", value: String(stats.totalTrainers) },
     { icon: School, label: "Running courses", value: String(stats.runningCourses) },
     { icon: CalendarClock, label: "Active classes", value: String(stats.activeClasses) },
-    { icon: Briefcase, label: "Students placed", value: formatCompact(stats.studentsPlaced, "") },
-    { icon: Banknote, label: "Avg placement salary", value: formatCompact(stats.avgPlacementSalary), sub: "per month" },
-    { icon: TrendingUp, label: "Avg student progress", value: `${stats.avgStudentProgress}%`, sub: `${stats.avgAttendance}% avg attendance` },
+    { icon: Wallet, label: "Fees collected", value: formatCompact(fees.totalCollected) },
+    { icon: Receipt, label: "Fees outstanding", value: formatCompact(fees.totalPending), sub: `${fees.pendingCount} pending invoices` },
+    { icon: CalendarCheck, label: "Class check-ins logged", value: attendance.totalClassRecords.toLocaleString() },
   ];
 
   return (
@@ -49,7 +52,7 @@ export default async function AdminDashboardPage() {
       <PortalHeading
         title="Organization"
         accent="at a glance"
-        description="Live view of every campus, classroom, and career Saylani is powering right now."
+        description="Live view of every campus, classroom, and rupee Saylani is managing right now."
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -62,7 +65,7 @@ export default async function AdminDashboardPage() {
         <section aria-labelledby="campus-performance-heading" className="portal-glow rounded-2xl border border-edge bg-white p-6">
           <div className="mb-5 flex items-center justify-between">
             <h2 id="campus-performance-heading" className="font-display text-xl text-black">
-              Campus-wise performance
+              Students by campus
             </h2>
             <Link href="/portal/admin/campuses" className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline">
               All campuses <ArrowRight className="h-3 w-3" aria-hidden />
@@ -71,37 +74,38 @@ export default async function AdminDashboardPage() {
           <BarList
             items={campuses.map((c) => ({
               label: `${c.name} — ${c.city}`,
-              sub: `${c.studentCount.toLocaleString()} students`,
-              percent: c.progressPercent,
+              sub: `${c.studentCount.toLocaleString()} students · ${c.trainerCount} trainers`,
+              percent: Math.round((c.studentCount / maxStudents) * 100),
             }))}
           />
         </section>
 
-        <section aria-labelledby="recent-placements-heading" className="portal-glow rounded-2xl border border-edge bg-white p-6">
+        <section aria-labelledby="recent-payments-heading" className="portal-glow rounded-2xl border border-edge bg-white p-6">
           <div className="mb-5 flex items-center justify-between">
-            <h2 id="recent-placements-heading" className="font-display text-xl text-black">
-              Recent job placements
+            <h2 id="recent-payments-heading" className="font-display text-xl text-black">
+              Recent fee invoices
             </h2>
-            <Link href="/portal/admin/jobs" className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline">
-              All placements <ArrowRight className="h-3 w-3" aria-hidden />
+            <Link href="/portal/admin/payments" className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline">
+              All payments <ArrowRight className="h-3 w-3" aria-hidden />
             </Link>
           </div>
           <ul className="divide-y divide-edge">
-            {recentPlacements.map((s) => (
-              <li key={s.id} className="flex items-center gap-3 py-3">
-                <Avatar name={s.name} />
+            {recentPayments.map((p) => (
+              <li key={p.id} className="flex items-center gap-3 py-3">
+                <Avatar name={p.studentName} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-ink">{s.name}</p>
-                  <p className="truncate text-xs text-ink-muted">
-                    {courseName[s.courseId] ?? "—"} · {campusName[s.campusId] ?? "—"}
-                  </p>
+                  <p className="truncate text-sm font-semibold text-ink">{p.studentName}</p>
+                  <p className="truncate text-xs text-ink-muted">{p.billingMonth} · due {p.dueDate || "—"}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-brand-700">{formatCurrency(s.salary ?? 0)}</p>
-                  <p className="text-xs text-ink-muted">{s.company}</p>
+                  <p className="text-sm font-bold text-brand-700">{formatCurrency(p.amount)}</p>
+                  {p.status === "paid" ? <Pill tone="green">Paid</Pill> : <Pill tone="amber">Pending</Pill>}
                 </div>
               </li>
             ))}
+            {recentPayments.length === 0 && (
+              <li className="py-8 text-center text-sm text-ink-muted">No fee invoices recorded yet.</li>
+            )}
           </ul>
         </section>
       </div>
@@ -122,7 +126,7 @@ export default async function AdminDashboardPage() {
               <Th>Students</Th>
               <Th>Trainers</Th>
               <Th>Courses</Th>
-              <Th>Placement rate</Th>
+              <Th>Established</Th>
             </tr>
           </thead>
           <tbody className="divide-y divide-edge">
@@ -135,9 +139,7 @@ export default async function AdminDashboardPage() {
                 <Td>{c.studentCount.toLocaleString()}</Td>
                 <Td>{c.trainerCount}</Td>
                 <Td>{c.courseCount}</Td>
-                <Td>
-                  <span className="font-bold text-accent-700">{c.placementRate}%</span>
-                </Td>
+                <Td className="text-ink-muted">{c.established || "—"}</Td>
               </tr>
             ))}
           </tbody>
