@@ -6,8 +6,10 @@
  * splits it across `students` (personal info) ⋈ `student_inductions`
  * (enrolment — campus/course/trainer/status). Every Student here is really
  * one induction joined to its student. Fields the real system doesn't track
- * (progress %, attendance %, placement/company/salary) are derived from the
- * enrolment `status` or left empty — see the derive* helpers below.
+ * per-student (progress %, placement/company/salary) are derived from the
+ * enrolment `status` or left empty — see the derive* helpers below. Real
+ * class attendance DOES exist (the `attendances` collection) but only
+ * covers a handful of students — see getAttendanceOverview().
  *
  * Every function falls back to the bundled mock data if MongoDB is
  * unreachable/unconfigured, so the app never hard-fails.
@@ -15,6 +17,7 @@
 import { ObjectId } from "mongodb";
 import type {
   ActiveClass,
+  AttendanceOverview,
   Campus,
   Course,
   OrgStats,
@@ -363,6 +366,58 @@ export function getStudents(): Promise<Student[]> {
 export function getPlacedStudents(_limit = 200): Promise<Student[]> {
   void _limit;
   return live(mock.getPlacedStudents, async () => []);
+}
+
+/**
+ * Real per-student class attendance from the `attendances` collection.
+ * Sparse by nature — only students who were ever actually marked present
+ * have a row here. There is no mock/demo fallback: showing fabricated
+ * attendance would be worse than honestly showing "not tracked yet".
+ */
+export function getAttendanceOverview(): Promise<AttendanceOverview> {
+  return live(
+    () => ({ records: [], studentsTracked: 0, totalStudents: 0, totalClassRecords: 0 }),
+    async () => {
+      const db = await mongo();
+      const [rows, totalStudents] = await Promise.all([
+        db
+          .collection("attendances")
+          .aggregate([
+            {
+              $group: {
+                _id: "$student_id",
+                classesAttended: { $sum: 1 },
+                lastAttended: { $max: "$time_stamp" },
+              },
+            },
+            { $lookup: { from: "students", localField: "_id", foreignField: "_id", as: "stu" } },
+            { $unwind: { path: "$stu", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: "student_inductions",
+                localField: "_id",
+                foreignField: "student_id",
+                as: "ind",
+              },
+            },
+            { $unwind: { path: "$ind", preserveNullAndEmptyArrays: true } },
+            { $sort: { classesAttended: -1 } },
+          ])
+          .toArray(),
+        db.collection("students").countDocuments(),
+      ]);
+      const records = rows.map((r) => ({
+        studentId: s(r._id),
+        name: s(r.stu?.full_name) || "—",
+        campusId: r.ind?.campus ? s(r.ind.campus) : "",
+        courseId: r.ind?.course ? s(r.ind.course) : "",
+        classesAttended: n(r.classesAttended),
+        lastAttended: s(r.lastAttended),
+      }));
+      const totalClassRecords = records.reduce((sum, r) => sum + r.classesAttended, 0);
+      return { records, studentsTracked: records.length, totalStudents, totalClassRecords };
+    },
+  );
 }
 
 export function getStudentsByTrainer(trainerId: string): Promise<Student[]> {

@@ -112,3 +112,22 @@ export interface OrgStats {
   avgStudentProgress: number;
   avgAttendance: number;
 }
+
+/** One student's real class-attendance record, from the `attendances`
+ *  collection — only students with at least one logged class appear here. */
+export interface AttendanceRecord {
+  studentId: string;
+  name: string;
+  campusId: string;
+  courseId: string;
+  classesAttended: number;
+  lastAttended: string;
+}
+
+export interface AttendanceOverview {
+  records: AttendanceRecord[];
+  /** How many students (out of totalStudents) have any logged attendance. */
+  studentsTracked: number;
+  totalStudents: number;
+  totalClassRecords: number;
+}

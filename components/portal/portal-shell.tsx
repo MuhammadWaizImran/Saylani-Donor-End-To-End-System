@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Briefcase,
   Building2,
+  CalendarCheck,
   CalendarClock,
   ChevronsRight,
   FilePlus2,
@@ -39,6 +40,7 @@ const navByRole: Record<UserRole, NavItem[]> = {
     { href: "/portal/admin/trainers", label: "Trainers", icon: Users },
     { href: "/portal/admin/courses", label: "Courses", icon: School },
     { href: "/portal/admin/classes", label: "Active Classes", icon: CalendarClock },
+    { href: "/portal/admin/attendance", label: "Attendance", icon: CalendarCheck },
     { href: "/portal/admin/jobs", label: "Jobs Secured", icon: Briefcase },
     { href: "/portal/admin/success-stories", label: "Success Stories", icon: Star },
     { href: "/portal/admin/data-entry", label: "Data Entry", icon: FilePlus2 },
