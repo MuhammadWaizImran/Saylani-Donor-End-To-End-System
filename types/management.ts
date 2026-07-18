@@ -17,6 +17,29 @@ export interface Session {
   role: UserRole;
 }
 
+/**
+ * What the signed-in user sees on their own profile page. Only fields that
+ * genuinely exist on their account document — extras stay undefined rather
+ * than being padded with placeholder values.
+ */
+export interface MyProfile {
+  name: string;
+  email: string;
+  role: UserRole;
+  /** The account's own role string in the source system (e.g. "super_admin"). */
+  sourceRole?: string;
+  phone?: string;
+  employeeId?: string;
+  /** Trainers only — PKR / hour. */
+  hourlyRate?: number;
+  campusName?: string;
+  /** Trainers only — the catalog courses they teach. */
+  courseNames?: string[];
+  /** ISO date the account document was created, when recorded. */
+  joinedAt?: string;
+  isTestAccount?: boolean;
+}
+
 export interface Campus {
   id: string;
   name: string;
@@ -28,6 +51,8 @@ export interface Campus {
   courseCount: number;
   placementRate: number; // %
   progressPercent: number; // overall campus progress
+  /** Campus photo URL, if the company has uploaded one — empty until they add it. */
+  image?: string;
 }
 
 export type CourseStatus = "running" | "completed" | "upcoming";
@@ -42,6 +67,26 @@ export interface Course {
   progressPercent: number;
   durationMonths: number;
   startedAt: string;
+}
+
+/** One course offering (batch) with its catalog entry's full content. */
+export interface CourseDetail extends Course {
+  coverImage?: string;
+  category: string;
+  /** Catalog duration text as stored, e.g. "2 months". */
+  durationText: string;
+  /** Free-text course description (stored as HTML by the training system). */
+  description: string;
+  outline: string[];
+  /** Admission instructions shown to applicants. */
+  instructions: string[];
+  batchNumber: number;
+  /** Monthly fee in PKR (0 when not set). */
+  fees: number;
+  /** Genders this batch is open to, e.g. ["Male","Female"]. */
+  gender: string[];
+  /** A batch can run at several campuses. */
+  campusIds: string[];
 }
 
 export type EnrollmentStatus = "active" | "inactive";
@@ -64,18 +109,60 @@ export interface Student {
   placementDate?: string;
 }
 
+/** One student's full profile — everything the training system records about them. */
+export interface StudentDetail extends Student {
+  /** The underlying `students` doc id. `Student.id` is the enrolment id. */
+  studentRecordId: string;
+  fatherName: string;
+  gender: string;
+  dateOfBirth: string;
+  cnic: string;
+  address: string;
+  lastQualification: string;
+  image?: string;
+  rollNumber: string;
+  batchNumber: number;
+  laptop: string;
+  isSponsored: boolean;
+  sponsorMessage: string;
+  enrolledAt: string;
+  /** Real class attendance from `attendances` (0 when never marked present). */
+  classesAttended: number;
+  lastAttended: string;
+  /** This student's own fee invoices. */
+  payments: Payment[];
+  totalPaid: number;
+  totalPending: number;
+}
+
 export interface Trainer {
   id: string;
   name: string;
   email: string;
   campusId: string;
-  salary: number; // PKR / month
+  salary: number; // PKR / hour
   specialization: string;
   studentCount: number;
   batchesCount: number;
   placedCount: number;
   performancePercent: number;
   joinedAt: string;
+}
+
+/** One trainer's full profile, plus their real check-in record. */
+export interface TrainerDetail extends Trainer {
+  image?: string;
+  phone: string;
+  /** Free-text bio (stored as HTML by the training system). */
+  description: string;
+  employeeId: string;
+  socialLinks: Array<{ name: string; url: string }>;
+  campusIds: string[];
+  /** Real sessions from `trainer_attendances` (0 when never checked in). */
+  sessions: number;
+  totalMinutes: number;
+  lateSessions: number;
+  lastCheckIn: string;
 }
 
 export interface ActiveClass {
@@ -155,6 +242,34 @@ export interface TrainerAttendanceOverview {
   totalMinutes: number;
 }
 
+/* ── Chart series ─────────────────────────────────────────────
+ * Bucketed aggregates for the dashboard's charts. Every series is built
+ * straight from the real collections — no gap-filling with invented zeros
+ * beyond the months the data itself spans. */
+
+/** One bucket of a single-measure trend (e.g. enrolments per month). */
+export interface TrendPoint {
+  /** Short axis label, e.g. "Jan 25". */
+  label: string;
+  /** Full label for tooltips/table, e.g. "January 2025". */
+  fullLabel: string;
+  value: number;
+}
+
+/** One month of fee billing, split into what was collected vs still owed. */
+export interface FeeTrendPoint {
+  label: string;
+  fullLabel: string;
+  collected: number;
+  outstanding: number;
+}
+
+/** One class of a nominal breakdown (e.g. enrolment status). */
+export interface BreakdownSlice {
+  label: string;
+  value: number;
+}
+
 /* ── Fundraising: campaigns / donations / donors ──────────────
  * From the `campaigns`, `donations`, and `public_donors` collections.
  * Read live from MongoDB. NOTE: this data is currently seeded sample
@@ -194,6 +309,28 @@ export interface PublicDonor {
   totalDonated: number;
   donationCount: number;
   memberSince: string;
+}
+
+/** One donor's full page: their profile plus every donation they've made. */
+export interface DonorDetail extends PublicDonor {
+  phone?: string;
+  /** Donations matched to this donor, newest first, with campaign titles. */
+  donations: Donation[];
+  /** Distinct campaigns this donor has given to. */
+  campaignCount: number;
+}
+
+/** One campaign's full page content, plus the donations it has received. */
+export interface CampaignDetail extends Campaign {
+  slug: string;
+  tagline: string;
+  description: string;
+  /** Long-form story, one entry per paragraph. */
+  story: string[];
+  imageUrl: string;
+  gallery: string[];
+  createdAt: string;
+  donations: Donation[];
 }
 
 export interface DonationOverview {

@@ -1,4 +1,5 @@
-import { HandCoins, HeartHandshake, Megaphone, Users } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, HandCoins, HeartHandshake, Megaphone, Users } from "lucide-react";
 import { getDonationOverview } from "@/lib/management-api";
 import { Avatar, Pill, PortalHeading, StatCard, TableShell, Td, Th } from "@/components/portal/ui";
 import { formatCompact, formatCurrency, percentFunded, timeAgo } from "@/lib/utils";
@@ -33,11 +34,11 @@ export default async function DonationsPage() {
 
       {/* ── Campaigns ───────────────────────────────────────── */}
       <section aria-labelledby="campaigns-heading" className="mt-10">
-        <h2 id="campaigns-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="campaigns-heading" className="mb-4 font-display text-xl text-ink-strong">
           Campaigns
         </h2>
         {o.campaigns.length === 0 ? (
-          <div className="portal-glow rounded-2xl border border-edge bg-white p-8 text-center text-sm text-ink-muted">
+          <div className="portal-glow rounded-2xl border border-edge bg-surface p-8 text-center text-sm text-ink-muted">
             No campaigns in the database yet.
           </div>
         ) : (
@@ -45,10 +46,14 @@ export default async function DonationsPage() {
             {o.campaigns.map((c) => {
               const funded = percentFunded(c.raisedAmount, c.goalAmount);
               return (
-                <div key={c.id} className="portal-glow rounded-2xl border border-edge bg-white p-5">
+                <Link
+                  key={c.id}
+                  href={`/portal/admin/donations/${c.id}`}
+                  className="portal-glow group rounded-2xl border border-edge bg-surface p-5 transition-all hover:-translate-y-0.5"
+                >
                   <div className="mb-2 flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate font-display text-lg text-black">{c.title}</p>
+                      <p className="truncate font-display text-lg text-ink-strong group-hover:text-brand-700">{c.title}</p>
                       <p className="text-xs text-ink-muted">
                         {c.category}
                         {c.location ? ` · ${c.location}` : ""}
@@ -58,7 +63,7 @@ export default async function DonationsPage() {
                   </div>
                   <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-surface-muted">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-brand-600 to-accent-500"
+                      className="h-full rounded-full bg-gradient-to-r from-brand-solid to-accent-500"
                       style={{ width: `${funded}%` }}
                     />
                   </div>
@@ -68,8 +73,14 @@ export default async function DonationsPage() {
                       of {formatCompact(c.goalAmount, c.currency)} · {funded}%
                     </span>
                   </div>
-                  <p className="mt-1 text-xs text-ink-muted">{c.donorCount.toLocaleString()} donors</p>
-                </div>
+                  <div className="mt-1 flex items-center justify-between">
+                    <p className="text-xs text-ink-muted">{c.donorCount.toLocaleString()} donors</p>
+                    <span className="flex items-center gap-1 text-xs font-semibold text-brand-700">
+                      Details
+                      <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" aria-hidden />
+                    </span>
+                  </div>
+                </Link>
               );
             })}
           </div>
@@ -78,11 +89,11 @@ export default async function DonationsPage() {
 
       {/* ── Recent donations ────────────────────────────────── */}
       <section aria-labelledby="donations-heading" className="mt-10">
-        <h2 id="donations-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="donations-heading" className="mb-4 font-display text-xl text-ink-strong">
           Recent donations
         </h2>
         {o.donations.length === 0 ? (
-          <div className="portal-glow rounded-2xl border border-edge bg-white p-8 text-center text-sm text-ink-muted">
+          <div className="portal-glow rounded-2xl border border-edge bg-surface p-8 text-center text-sm text-ink-muted">
             No donations recorded yet.
           </div>
         ) : (
@@ -107,7 +118,18 @@ export default async function DonationsPage() {
                       </div>
                     </div>
                   </Td>
-                  <Td>{d.campaignTitle}</Td>
+                  <Td>
+                    {d.campaignId ? (
+                      <Link
+                        href={`/portal/admin/donations/${d.campaignId}`}
+                        className="text-brand-700 hover:underline"
+                      >
+                        {d.campaignTitle}
+                      </Link>
+                    ) : (
+                      d.campaignTitle
+                    )}
+                  </Td>
                   <Td>
                     <span className="font-bold text-accent-700">{formatCurrency(d.amount, d.currency)}</span>
                   </Td>
@@ -121,11 +143,11 @@ export default async function DonationsPage() {
 
       {/* ── Top donors ──────────────────────────────────────── */}
       <section aria-labelledby="donors-heading" className="mt-10">
-        <h2 id="donors-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="donors-heading" className="mb-4 font-display text-xl text-ink-strong">
           Top donors
         </h2>
         {o.donors.length === 0 ? (
-          <div className="portal-glow rounded-2xl border border-edge bg-white p-8 text-center text-sm text-ink-muted">
+          <div className="portal-glow rounded-2xl border border-edge bg-surface p-8 text-center text-sm text-ink-muted">
             No registered donors yet.
           </div>
         ) : (
@@ -141,12 +163,17 @@ export default async function DonationsPage() {
             </thead>
             <tbody className="divide-y divide-edge">
               {o.donors.map((u) => (
-                <tr key={u.id} className="hover:bg-surface-muted/60">
+                <tr key={u.id} className="group hover:bg-surface-muted/60">
                   <Td>
-                    <div className="flex items-center gap-3">
+                    <Link
+                      href={`/portal/admin/donors/${u.id}`}
+                      className="flex items-center gap-3"
+                    >
                       <Avatar name={u.name} />
-                      <span className="font-semibold text-ink">{u.name}</span>
-                    </div>
+                      <span className="font-semibold text-ink group-hover:text-brand-700 group-hover:underline">
+                        {u.name}
+                      </span>
+                    </Link>
                   </Td>
                   <Td className="text-ink-muted">{u.email || "—"}</Td>
                   <Td>

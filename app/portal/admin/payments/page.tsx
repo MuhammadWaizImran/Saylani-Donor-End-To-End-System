@@ -1,13 +1,15 @@
 import { CircleCheck, Clock, Receipt, Wallet } from "lucide-react";
-import { getPaymentOverview } from "@/lib/management-api";
+import { getFeeTrend, getPaymentOverview } from "@/lib/management-api";
 import { Avatar, Pill, PortalHeading, StatCard, TableShell, Td, Th } from "@/components/portal/ui";
+import { ChartCard, ChartTable, ColumnChart } from "@/components/portal/charts";
+import { CHART_SERIES } from "@/lib/chart-palette";
 import { formatCompact, formatCurrency } from "@/lib/utils";
 
 export const metadata = { title: "Fee Payments" };
 export const dynamic = "force-dynamic";
 
 export default async function PaymentsPage() {
-  const o = await getPaymentOverview();
+  const [o, feeTrend] = await Promise.all([getPaymentOverview(), getFeeTrend()]);
   const collectionRate =
     o.totalInvoices > 0 ? Math.round((o.paidCount / o.totalInvoices) * 100) : 0;
 
@@ -31,12 +33,47 @@ export default async function PaymentsPage() {
         <StatCard icon={Receipt} label="Pending invoices" value={o.pendingCount.toLocaleString()} />
       </div>
 
+      <div className="mt-10">
+        <ChartCard
+          title="Collection by billing month"
+          subtitle={`Every billed month on record · ${feeTrend.length} months`}
+          legend={[
+            { label: "Collected", color: CHART_SERIES[0] },
+            { label: "Outstanding", color: CHART_SERIES[1] },
+          ]}
+          table={
+            <ChartTable
+              head={["Month", "Collected", "Outstanding", "Total billed"]}
+              rows={feeTrend.map((p) => [
+                p.fullLabel,
+                formatCurrency(p.collected),
+                formatCurrency(p.outstanding),
+                formatCurrency(p.collected + p.outstanding),
+              ])}
+            />
+          }
+        >
+          <ColumnChart
+            data={feeTrend.map((p) => ({
+              label: p.label,
+              fullLabel: p.fullLabel,
+              values: [p.collected, p.outstanding],
+            }))}
+            series={[
+              { label: "Collected", color: CHART_SERIES[0] },
+              { label: "Outstanding", color: CHART_SERIES[1] },
+            ]}
+            format="compact"
+          />
+        </ChartCard>
+      </div>
+
       <section aria-labelledby="payments-heading" className="mt-10">
-        <h2 id="payments-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="payments-heading" className="mb-4 font-display text-xl text-ink-strong">
           Recent invoices
         </h2>
         {o.payments.length === 0 ? (
-          <div className="portal-glow rounded-2xl border border-edge bg-white p-8 text-center text-sm text-ink-muted">
+          <div className="portal-glow rounded-2xl border border-edge bg-surface p-8 text-center text-sm text-ink-muted">
             No fee invoices in the database yet.
           </div>
         ) : (

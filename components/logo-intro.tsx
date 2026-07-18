@@ -78,6 +78,8 @@ export function LogoIntro() {
   return (
     <div
       aria-hidden
+      // Deliberately white in BOTH themes (the user's choice) — the intro is
+      // the original brand splash, not a themed surface.
       className="fixed inset-0 z-[200] flex items-center justify-center bg-white"
       style={{
         opacity: exiting ? 0 : 1,

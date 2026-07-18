@@ -77,7 +77,7 @@ export function SearchInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-edge bg-white py-2.5 pl-10 pr-4 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+        className="w-full rounded-xl border border-edge bg-surface py-2.5 pl-10 pr-4 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
       />
     </div>
   );
@@ -132,7 +132,7 @@ export function PaginationBar({
         type="button"
         disabled={page <= 1 || isPending}
         onClick={onPrev}
-        className="inline-flex items-center gap-1.5 rounded-full border border-edge bg-white px-4 py-2 text-sm font-semibold text-ink transition-colors enabled:hover:border-brand-400 enabled:hover:text-brand-700 disabled:opacity-40"
+        className="inline-flex items-center gap-1.5 rounded-full border border-edge bg-surface px-4 py-2 text-sm font-semibold text-ink transition-colors enabled:hover:border-brand-400 enabled:hover:text-brand-700 disabled:opacity-40"
       >
         <ChevronLeft className="h-4 w-4" aria-hidden />
         Previous
@@ -145,7 +145,7 @@ export function PaginationBar({
         type="button"
         disabled={page >= totalPages || isPending}
         onClick={onNext}
-        className="inline-flex items-center gap-1.5 rounded-full border border-edge bg-white px-4 py-2 text-sm font-semibold text-ink transition-colors enabled:hover:border-brand-400 enabled:hover:text-brand-700 disabled:opacity-40"
+        className="inline-flex items-center gap-1.5 rounded-full border border-edge bg-surface px-4 py-2 text-sm font-semibold text-ink transition-colors enabled:hover:border-brand-400 enabled:hover:text-brand-700 disabled:opacity-40"
       >
         Next
         <ChevronRight className="h-4 w-4" aria-hidden />

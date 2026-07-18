@@ -12,11 +12,11 @@ export function StatCard({
   sub?: string;
 }) {
   return (
-    <div className="portal-glow rounded-2xl border border-edge bg-white p-5">
+    <div className="portal-glow rounded-2xl border border-edge bg-surface p-5">
       <span className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-50 text-accent-700">
         <Icon className="h-5 w-5" aria-hidden />
       </span>
-      <p className="font-display text-3xl text-black">{value}</p>
+      <p className="font-display text-3xl text-ink-strong">{value}</p>
       <p className="mt-1 text-xs font-semibold uppercase tracking-wider text-ink-muted">{label}</p>
       {sub && <p className="mt-1 text-xs text-ink-muted">{sub}</p>}
     </div>
@@ -35,7 +35,7 @@ export function MiniProgress({ percent, className }: { percent: number; classNam
         className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-muted"
       >
         <div
-          className="h-full rounded-full bg-gradient-to-r from-brand-600 to-accent-500"
+          className="h-full rounded-full bg-gradient-to-r from-brand-solid to-accent-500"
           style={{ width: `${clamped}%` }}
         />
       </div>
@@ -48,8 +48,8 @@ const pillStyles: Record<string, string> = {
   green: "bg-accent-50 text-accent-800 ring-accent-200",
   gray: "bg-surface-muted text-ink-muted ring-edge",
   dark: "bg-brand-50 text-brand-800 ring-brand-200",
-  red: "bg-red-50 text-red-700 ring-red-200",
-  amber: "bg-amber-50 text-amber-700 ring-amber-200",
+  red: "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 ring-red-200 dark:ring-red-900",
+  amber: "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 ring-amber-200 dark:ring-amber-900",
 };
 
 export function Pill({
@@ -82,11 +82,11 @@ export function PortalHeading({
 }) {
   return (
     <div className="mb-8">
-      <h1 className="font-display text-3xl tracking-tight text-black sm:text-4xl">
+      <h1 className="font-display text-3xl tracking-tight text-ink-strong sm:text-4xl">
         {title}
-        {accent && <em className="text-[#6F6F6F]"> {accent}</em>}
+        {accent && <em className="text-ink-muted"> {accent}</em>}
       </h1>
-      {description && <p className="mt-2 max-w-2xl text-sm text-[#6F6F6F]">{description}</p>}
+      {description && <p className="mt-2 max-w-2xl text-sm text-ink-muted">{description}</p>}
     </div>
   );
 }
@@ -110,7 +110,7 @@ export function BarList({
           </div>
           <div className="h-2.5 overflow-hidden rounded-full bg-surface-muted">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-brand-600 to-accent-500"
+              className="h-full rounded-full bg-gradient-to-r from-brand-solid to-accent-500"
               style={{ width: `${Math.min(100, item.percent)}%` }}
             />
           </div>
@@ -128,7 +128,7 @@ export function TableShell({
   minWidth?: number;
 }) {
   return (
-    <div className="portal-glow overflow-x-auto rounded-2xl border border-edge bg-white">
+    <div className="portal-glow overflow-x-auto rounded-2xl border border-edge bg-surface">
       <table className="w-full text-left text-sm" style={{ minWidth }}>
         {children}
       </table>
@@ -159,7 +159,7 @@ export function Avatar({ name, className }: { name: string; className?: string }
     <span
       aria-hidden
       className={cn(
-        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-600 to-accent-500 text-xs font-bold text-white",
+        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-solid to-accent-500 text-xs font-bold text-white",
         className,
       )}
     >

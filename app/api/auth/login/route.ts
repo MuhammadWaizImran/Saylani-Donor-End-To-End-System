@@ -17,15 +17,21 @@ const schema = z.object({
  * separate from `users`). Donor accounts have no real-data equivalent, so
  * they live in our own `portal_donors` collection instead.
  */
+/** Case-insensitive collation, not a $regex scan — matches the collation
+ *  index ensured by scripts/ensure-indexes.ts on each collection's `email`
+ *  field, so this stays a real index lookup as the collections grow. */
+const EMAIL_COLLATION = { locale: "en", strength: 2 } as const;
+
 async function findAccount(
   role: UserRole,
   email: string,
 ): Promise<{ session: Session; passwordHash: string } | null> {
   const db = await mongo();
-  const emailFilter = { email: { $regex: `^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" } };
+  const emailFilter = { email };
+  const opts = { collation: EMAIL_COLLATION };
 
   if (role === "admin") {
-    const doc = await db.collection("users").findOne(emailFilter);
+    const doc = await db.collection("users").findOne(emailFilter, opts);
     if (!doc?.password) return null;
     return {
       session: { userId: String(doc._id), name: doc.name ?? doc.email, email: doc.email, role: "admin" },
@@ -34,7 +40,7 @@ async function findAccount(
   }
 
   if (role === "trainer") {
-    const doc = await db.collection("trainers").findOne(emailFilter);
+    const doc = await db.collection("trainers").findOne(emailFilter, opts);
     if (!doc?.password) return null;
     return {
       session: {
@@ -47,7 +53,7 @@ async function findAccount(
     };
   }
 
-  const doc = await db.collection("portal_donors").findOne(emailFilter);
+  const doc = await db.collection("portal_donors").findOne(emailFilter, opts);
   if (!doc?.password) return null;
   return {
     session: { userId: String(doc._id), name: doc.name ?? doc.email, email: doc.email, role: "donor" },

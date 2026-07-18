@@ -1,10 +1,12 @@
 import { AlarmClock, CalendarCheck, ClipboardList, Clock, UserCheck, Users } from "lucide-react";
 import {
   getAttendanceOverview,
+  getAttendanceTrend,
   getTrainerAttendanceOverview,
   resolveNames,
 } from "@/lib/management-api";
 import { Avatar, PortalHeading, StatCard, TableShell, Td, Th } from "@/components/portal/ui";
+import { ChartCard, ChartTable, TrendArea } from "@/components/portal/charts";
 import { timeAgo } from "@/lib/utils";
 
 export const metadata = { title: "Attendance" };
@@ -21,9 +23,10 @@ function formatDuration(mins: number): string {
 }
 
 export default async function AttendancePage() {
-  const [students, trainers] = await Promise.all([
+  const [students, trainers, attendanceTrend] = await Promise.all([
     getAttendanceOverview(),
     getTrainerAttendanceOverview(),
+    getAttendanceTrend(),
   ]);
 
   const untracked = students.totalStudents - students.studentsTracked;
@@ -47,9 +50,29 @@ export default async function AttendancePage() {
         description="Real check-ins from the training system — students in class and trainers on campus, shown exactly as recorded, not estimated."
       />
 
+      {/* Check-in activity over time — the whole logged history */}
+      <div className="mb-10">
+        <ChartCard
+          title="Class check-ins by month"
+          subtitle={
+            attendanceTrend.length > 0
+              ? `${students.totalClassRecords.toLocaleString()} check-ins logged from ${attendanceTrend[0].fullLabel} to ${attendanceTrend[attendanceTrend.length - 1].fullLabel}`
+              : "No check-ins logged yet"
+          }
+          table={
+            <ChartTable
+              head={["Month", "Check-ins"]}
+              rows={attendanceTrend.map((p) => [p.fullLabel, p.value.toLocaleString()])}
+            />
+          }
+        >
+          <TrendArea data={attendanceTrend} format="number" />
+        </ChartCard>
+      </div>
+
       {/* ── Students ────────────────────────────────────────── */}
       <section aria-labelledby="student-att-heading">
-        <h2 id="student-att-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="student-att-heading" className="mb-4 font-display text-xl text-ink-strong">
           Student attendance
         </h2>
 
@@ -74,7 +97,7 @@ export default async function AttendancePage() {
 
         <div className="mt-5">
           {students.records.length === 0 ? (
-            <div className="portal-glow rounded-2xl border border-edge bg-white p-8 text-center text-sm text-ink-muted">
+            <div className="portal-glow rounded-2xl border border-edge bg-surface p-8 text-center text-sm text-ink-muted">
               No attendance has been logged for any student yet.
             </div>
           ) : (
@@ -119,7 +142,7 @@ export default async function AttendancePage() {
 
       {/* ── Trainers ────────────────────────────────────────── */}
       <section aria-labelledby="trainer-att-heading" className="mt-12">
-        <h2 id="trainer-att-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="trainer-att-heading" className="mb-4 font-display text-xl text-ink-strong">
           Trainer attendance
         </h2>
 
@@ -144,7 +167,7 @@ export default async function AttendancePage() {
 
         <div className="mt-5">
           {trainers.records.length === 0 ? (
-            <div className="portal-glow rounded-2xl border border-edge bg-white p-8 text-center text-sm text-ink-muted">
+            <div className="portal-glow rounded-2xl border border-edge bg-surface p-8 text-center text-sm text-ink-muted">
               No check-ins have been logged for any trainer yet.
             </div>
           ) : (
@@ -175,7 +198,7 @@ export default async function AttendancePage() {
                       <Td>{formatDuration(r.totalMinutes)}</Td>
                       <Td>
                         {r.lateSessions > 0 ? (
-                          <span className="font-semibold text-amber-600">{r.lateSessions}</span>
+                          <span className="font-semibold text-amber-600 dark:text-amber-400">{r.lateSessions}</span>
                         ) : (
                           <span className="text-ink-muted">0</span>
                         )}

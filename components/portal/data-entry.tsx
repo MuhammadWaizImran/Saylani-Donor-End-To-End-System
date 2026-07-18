@@ -71,13 +71,13 @@ const entities: EntityDef[] = [
     id: "trainer",
     label: "Trainer",
     icon: Users,
-    blurb: "Add a trainer with campus assignment and salary.",
+    blurb: "Add a trainer with campus assignment and hourly rate.",
     fields: [
       { key: "name", label: "Full name", type: "text", required: true },
       { key: "email", label: "Email", type: "email", required: true },
       { key: "campus_id", label: "Campus", type: "select", options: "campuses", required: true },
       { key: "specialization", label: "Specialization", type: "text", placeholder: "e.g. MERN Stack Development", required: true },
-      { key: "salary", label: "Monthly salary (PKR)", type: "number", placeholder: "120000", required: true },
+      { key: "salary", label: "Hourly rate (PKR)", type: "number", placeholder: "1200", required: true },
       { key: "joined_at", label: "Joining date", type: "date", required: true },
     ],
   },
@@ -118,7 +118,7 @@ interface LookupData {
 }
 
 const inputClass =
-  "w-full rounded-xl border-2 border-edge bg-white px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none";
+  "w-full rounded-xl border-2 border-edge bg-surface px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none";
 
 export function DataEntry() {
   const router = useRouter();
@@ -205,7 +205,7 @@ export function DataEntry() {
                 "flex items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-colors",
                 isActive
                   ? "border-brand-600 bg-brand-50 text-brand-800"
-                  : "border-edge bg-white text-[#6F6F6F] hover:border-brand-300 hover:text-black",
+                  : "border-edge bg-surface text-ink-muted hover:border-brand-300 hover:text-ink-strong",
               )}
             >
               <Icon className={cn("h-4 w-4", isActive ? "text-brand-700" : "text-ink-muted")} aria-hidden />
@@ -225,9 +225,9 @@ export function DataEntry() {
           transition={{ duration: 0.25 }}
           onSubmit={onSubmit}
           noValidate
-          className="portal-glow rounded-2xl border border-edge bg-white p-6 sm:p-8"
+          className="portal-glow rounded-2xl border border-edge bg-surface p-6 sm:p-8"
         >
-          <h2 className="font-display text-2xl text-black">New {active.label.toLowerCase()}</h2>
+          <h2 className="font-display text-2xl text-ink-strong">New {active.label.toLowerCase()}</h2>
           <p className="mt-1 text-sm text-ink-muted">{active.blurb}</p>
 
           <div className="mt-6 grid gap-5 sm:grid-cols-2">
@@ -253,7 +253,7 @@ export function DataEntry() {
                 <div key={field.key} className={wide ? "sm:col-span-2" : undefined}>
                   <label htmlFor={id} className="block text-sm font-bold text-ink">
                     {field.label}
-                    {field.required && <span className="text-red-500"> *</span>}
+                    {field.required && <span className="text-red-500 dark:text-red-400"> *</span>}
                   </label>
                   {field.type === "select" ? (
                     <select
@@ -298,7 +298,7 @@ export function DataEntry() {
               role="alert"
               className={cn(
                 "mt-5 flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium",
-                result.ok ? "bg-accent-50 text-accent-800" : "bg-red-50 text-red-700",
+                result.ok ? "bg-accent-50 text-accent-800" : "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300",
               )}
             >
               {result.ok ? (
@@ -313,7 +313,7 @@ export function DataEntry() {
           <button
             type="submit"
             disabled={submitting}
-            className="mt-6 inline-flex items-center gap-2 rounded-full bg-brand-700 px-8 py-3 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-50"
+            className="mt-6 inline-flex items-center gap-2 rounded-full bg-brand-solid px-8 py-3 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-50"
           >
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />

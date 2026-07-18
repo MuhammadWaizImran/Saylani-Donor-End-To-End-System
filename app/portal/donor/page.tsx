@@ -44,8 +44,8 @@ export default async function DonorDashboardPage() {
       </div>
 
       <div className="mt-10 grid gap-8 lg:grid-cols-2">
-        <section aria-labelledby="donor-campus-heading" className="portal-glow rounded-2xl border border-edge bg-white p-6">
-          <h2 id="donor-campus-heading" className="mb-5 font-display text-xl text-black">
+        <section aria-labelledby="donor-campus-heading" className="portal-glow rounded-2xl border border-edge bg-surface p-6">
+          <h2 id="donor-campus-heading" className="mb-5 font-display text-xl text-ink-strong">
             Students by campus
           </h2>
           <BarList
@@ -57,8 +57,8 @@ export default async function DonorDashboardPage() {
           />
         </section>
 
-        <section aria-labelledby="donor-impact-heading" className="portal-glow flex flex-col rounded-2xl border border-edge bg-white p-6">
-          <h2 id="donor-impact-heading" className="mb-5 font-display text-xl text-black">
+        <section aria-labelledby="donor-impact-heading" className="portal-glow flex flex-col rounded-2xl border border-edge bg-surface p-6">
+          <h2 id="donor-impact-heading" className="mb-5 font-display text-xl text-ink-strong">
             Live classroom activity
           </h2>
           <ul className="flex-1 divide-y divide-edge">
@@ -90,13 +90,13 @@ export default async function DonorDashboardPage() {
       </div>
 
       <section aria-labelledby="donor-campus-detail-heading" className="mt-10">
-        <h2 id="donor-campus-detail-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="donor-campus-detail-heading" className="mb-4 font-display text-xl text-ink-strong">
           Campus details
         </h2>
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
           {campuses.map((c) => (
-            <article key={c.id} className="portal-glow rounded-2xl border border-edge bg-white p-5">
-              <h3 className="font-display text-lg text-black">{c.name}</h3>
+            <article key={c.id} className="portal-glow rounded-2xl border border-edge bg-surface p-5">
+              <h3 className="font-display text-lg text-ink-strong">{c.name}</h3>
               <p className="text-xs text-ink-muted">{c.city}{c.established ? ` · since ${c.established}` : ""}</p>
               <dl className="mt-4 grid grid-cols-3 gap-2 text-center text-sm">
                 <div className="rounded-xl bg-surface-muted p-2.5">

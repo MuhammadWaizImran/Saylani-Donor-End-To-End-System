@@ -25,7 +25,7 @@ export default async function TrainersPage({
       <PortalHeading
         title="Trainers,"
         accent="the multiplier effect"
-        description="Every trainer with their campus, salary, batches, students, and job-placement record."
+        description="Every trainer with their campus, specialization, hourly rate, students, and class slots."
       />
       <TrainersTable trainers={enriched} total={result.total} page={result.page} pageSize={result.pageSize} />
     </>

@@ -5,7 +5,6 @@ import {
   getCoursesByTrainer,
   getStudentsByTrainer,
   getTrainer,
-  getTrainers,
 } from "@/lib/management-api";
 
 /**
@@ -21,9 +20,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Trainers only." }, { status: 403 });
   }
 
-  const trainer = (await getTrainer(session.email)) ?? (await getTrainers())[0];
+  // Must be THIS trainer's own record. The old `?? getTrainers()[0]` fallback
+  // meant a lookup miss served the first trainer in the DB — another person's
+  // students, courses, everything. A missing profile is a 404, never someone
+  // else's data.
+  const trainer = await getTrainer(session.email);
   if (!trainer) {
-    return NextResponse.json({ error: "No trainer profile found" }, { status: 404 });
+    return NextResponse.json({ error: "No trainer profile found for your account." }, { status: 404 });
   }
 
   // Targeted lookups only — the trainer's own campus + courses (global

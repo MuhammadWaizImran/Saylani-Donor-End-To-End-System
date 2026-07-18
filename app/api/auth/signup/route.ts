@@ -36,7 +36,10 @@ export async function POST(req: Request) {
 
   const db = await mongo();
   const donors = db.collection("portal_donors");
-  const existing = await donors.findOne({ email: { $regex: `^${email}$`, $options: "i" } });
+  // Exact match under a case-insensitive collation — index-backed (see
+  // scripts/ensure-indexes.ts), unlike a $regex scan, and never misparses an
+  // email containing regex metacharacters (e.g. "user+tag@example.com").
+  const existing = await donors.findOne({ email }, { collation: { locale: "en", strength: 2 } });
   if (existing) {
     return NextResponse.json(
       { error: "An account with this email already exists — try logging in." },

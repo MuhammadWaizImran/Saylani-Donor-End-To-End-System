@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { Quote, Sparkles } from "lucide-react";
@@ -16,7 +17,7 @@ function AnimatedHeadline() {
       initial="hidden"
       animate="visible"
       transition={{ staggerChildren: 0.045 }}
-      className="font-display text-2xl leading-snug tracking-tight text-black sm:text-3xl"
+      className="font-display text-2xl leading-snug tracking-tight text-ink-strong sm:text-3xl"
       aria-label={headline}
     >
       {words.map((word, i) => (
@@ -48,7 +49,7 @@ export function SuccessStoriesSection({ stories }: { stories: SuccessStory[] }) 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: wordsDelay(headline), duration: 0.5 }}
-        className="mt-3 max-w-2xl text-sm text-[#6F6F6F]"
+        className="mt-3 max-w-2xl text-sm text-ink-muted"
       >
         Real graduates, real careers — a look at where SMIT training led them.
       </motion.p>
@@ -61,23 +62,10 @@ export function SuccessStoriesSection({ stories }: { stories: SuccessStory[] }) 
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true, margin: "-40px" }}
             transition={{ duration: 0.5, delay: (i % 6) * 0.06, ease: "easeOut" }}
-            className="portal-glow flex flex-col overflow-hidden rounded-2xl border border-edge bg-white"
+            className="portal-glow flex flex-col overflow-hidden rounded-2xl border border-edge bg-surface"
           >
             <div className="relative h-48 w-full shrink-0 bg-surface-muted">
-              {story.photo ? (
-                <Image
-                  src={story.photo}
-                  alt={story.name}
-                  fill
-                  sizes="(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
-                  className="object-cover"
-                  unoptimized
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-ink-muted">
-                  No photo
-                </div>
-              )}
+              <StoryPhoto photo={story.photo} name={story.name} />
               {story.isDemo && (
                 <span className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
                   Demo
@@ -85,13 +73,13 @@ export function SuccessStoriesSection({ stories }: { stories: SuccessStory[] }) 
               )}
             </div>
             <div className="flex flex-1 flex-col p-5">
-              <p className="font-display text-lg text-black">{story.name}</p>
+              <p className="font-display text-lg text-ink-strong">{story.name}</p>
               {story.designation && (
                 <div className="mt-1">
                   <Pill tone="dark">{story.designation}</Pill>
                 </div>
               )}
-              <div className="mt-4 flex flex-1 gap-2 text-sm leading-relaxed text-[#6F6F6F]">
+              <div className="mt-4 flex flex-1 gap-2 text-sm leading-relaxed text-ink-muted">
                 <Quote className="mt-0.5 h-4 w-4 shrink-0 text-accent-400" aria-hidden />
                 <p>{story.story}</p>
               </div>
@@ -114,4 +102,27 @@ export function SuccessStoriesSection({ stories }: { stories: SuccessStory[] }) 
 /** Rough delay so the subtitle fades in right after the headline finishes animating. */
 function wordsDelay(text: string): number {
   return text.split(" ").length * 0.045 + 0.15;
+}
+
+/** Story thumbnail with a graceful fallback: no URL, or a URL that 404s
+ *  (the collection holds dead links), lands on the same "No photo" block
+ *  instead of a broken image. */
+function StoryPhoto({ photo, name }: { photo: string; name: string }) {
+  const [broken, setBroken] = useState(false);
+  if (!photo || broken) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-ink-muted">No photo</div>
+    );
+  }
+  return (
+    <Image
+      src={photo}
+      alt={name}
+      fill
+      sizes="(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
+      className="object-cover"
+      unoptimized
+      onError={() => setBroken(true)}
+    />
+  );
 }

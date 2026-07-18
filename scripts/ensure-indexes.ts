@@ -6,7 +6,9 @@
  * Indexes are chosen to match the ACTUAL query shapes in the code — the
  * equality / $in / $ne / $group fields the queries filter and group on. (Note:
  * the search bars use case-insensitive substring $regex, which a plain B-tree
- * index can't accelerate, so we don't create unused "search" indexes here.)
+ * index can't accelerate, so we don't create unused "search" indexes here.
+ * Auth email lookups are a different case — they're an EXACT match, just
+ * case-insensitive, so a collation index below serves them properly instead.)
  *
  * createIndex is idempotent — safe to run repeatedly and on every deploy.
  *
@@ -46,7 +48,19 @@ const PLAN: Record<string, Array<Record<string, 1 | -1>>> = {
   // Fee payments: joined to students; donations listed newest-first.
   payments: [{ student: 1 }, { status: 1 }],
   donations: [{ createdAt: -1 }],
+  // AI Assistant chat history: listed per-user, newest first.
+  agent_conversations: [{ userId: 1, updatedAt: -1 }],
 };
+
+/**
+ * Case-insensitive collation indexes for the auth email lookups (login,
+ * signup's duplicate-email check). These queries now match `{ email }`
+ * exactly under this same collation instead of an anchored $regex — a plain
+ * index can't serve a case-insensitive match, but an index built WITH this
+ * collation can, so this is what actually makes those lookups index-backed.
+ */
+const EMAIL_COLLATION = { locale: "en", strength: 2 } as const;
+const EMAIL_COLLATION_PLAN = ["users", "trainers", "portal_donors"];
 
 async function main() {
   const client = await new MongoClient(uri!).connect();
@@ -61,6 +75,46 @@ async function main() {
       console.log(`  ${coll.padEnd(20)} ${label.padEnd(22)} -> ${name}`);
       created++;
     }
+  }
+
+  for (const coll of EMAIL_COLLATION_PLAN) {
+    const name = await db.collection(coll).createIndex({ email: 1 }, { collation: EMAIL_COLLATION });
+    console.log(`  ${coll.padEnd(20)} ${"email (ci)".padEnd(22)} -> ${name}`);
+    created++;
+  }
+
+  // JWT revocation list (see lib/auth-jwt.ts): jti is looked up on every
+  // authenticated request, and expiresAt is a TTL index — Mongo drops each
+  // row automatically once it reaches the token's own expiry, so logged-out
+  // entries don't accumulate forever.
+  {
+    const name = await db.collection("revoked_sessions").createIndex({ jti: 1 }, { unique: true });
+    console.log(`  ${"revoked_sessions".padEnd(20)} ${"jti (unique)".padEnd(22)} -> ${name}`);
+    created++;
+  }
+  {
+    const name = await db
+      .collection("revoked_sessions")
+      .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+    console.log(`  ${"revoked_sessions".padEnd(20)} ${"expiresAt (TTL)".padEnd(22)} -> ${name}`);
+    created++;
+  }
+
+  // AI-generated Word reports (GridFS). Downloads filter by owner (metadata.
+  // ownerId — see /api/reports/[id]); the TTL on metadata.expiresAt makes the
+  // tool's "link expires in 24 hours" promise real by dropping the file doc
+  // at that time, so an expired id simply 404s.
+  {
+    const name = await db.collection("reports.files").createIndex({ "metadata.ownerId": 1 });
+    console.log(`  ${"reports.files".padEnd(20)} ${"metadata.ownerId".padEnd(22)} -> ${name}`);
+    created++;
+  }
+  {
+    const name = await db
+      .collection("reports.files")
+      .createIndex({ "metadata.expiresAt": 1 }, { expireAfterSeconds: 0 });
+    console.log(`  ${"reports.files".padEnd(20)} ${"metadata.expiresAt(TTL)".padEnd(22)} -> ${name}`);
+    created++;
   }
 
   console.log(`\nDone. ${created} indexes ensured (existing ones were left untouched).`);

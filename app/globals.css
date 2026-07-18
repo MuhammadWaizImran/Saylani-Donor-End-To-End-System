@@ -1,13 +1,17 @@
 @import "tailwindcss";
 
-/* Kept defined (but never activated) so any leftover `dark:` utilities stay
-   inert instead of falling back to the media-query variant. */
-@custom-variant dark (&:where(.dark, .dark *));
+/* User-selected dark theme — activated by a `.dark` class on <html>, set
+   before paint by the inline script in app/layout.tsx and toggled from the
+   portal topbar. Subtrees marked `.theme-light` (the auth pages, per the
+   user's request) are excluded: they keep the original light design in both
+   themes. */
+@custom-variant dark (&:where(.dark, .dark *):not(:where(.theme-light, .theme-light *)));
 
-@theme inline {
-  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
-
+/* ── Color tokens ──────────────────────────────────────────────
+   Deliberately NOT `@theme inline`: utilities must compile to var()
+   references so the `.dark` block further down can re-skin the whole app at
+   runtime by overriding the custom properties. */
+@theme {
   /* SMIT blue — exact primary/dark lifted from saylanimit.com (#0B73B7 / #005A94) */
   --color-brand-50: #eaf4fc;
   --color-brand-100: #d6e9f7;
@@ -35,11 +39,24 @@
   --color-accent-900: #3a561f;
   --color-accent-950: #1d2f0c;
 
+  /* Solid brand fills (buttons, active nav, chat bubbles). Separate from the
+     ramp because in dark mode the 600–950 steps flip to LIGHT blues for text
+     legibility — a filled control must keep its deep background either way. */
+  --color-brand-solid: #0b73b7;
+  --color-brand-solid-deep: #005a94;
+
   --color-surface: #ffffff;
   --color-surface-muted: #f3f7fa;
   --color-ink: #0e1d29;
   --color-ink-muted: #6f6f6f;
+  /* Headline ink — pure black in light, near-white in dark. */
+  --color-ink-strong: #000000;
   --color-edge: #dde8ef;
+}
+
+@theme inline {
+  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
 
   --animate-marquee: marquee 30s linear infinite;
   --animate-fade-rise: fade-rise 0.8s ease-out both;
@@ -69,6 +86,131 @@
 
 :root {
   color-scheme: light;
+
+  /* Chart colors, consumed as var() strings via lib/chart-palette.ts so the
+     hand-rolled SVG charts re-skin with the theme. Light pair validated:
+     #0b73b7 + #558124 (all six checks pass — see chart-palette.ts). */
+  --chart-series-1: #0b73b7;
+  --chart-series-2: #558124;
+  --chart-grid: #dde8ef;
+  --chart-axis-ink: #6f6f6f;
+  --chart-surface: #ffffff;
+
+  /* Enrolment donut — 3 categorical slots, validated on white:
+     #0b73b7 + #8cc544 + #b91c1c (CVD ΔE 23.2, normal-vision ΔE 31.0 — all
+     pairs pass; green's contrast sits in the WARN band, which the chart
+     covers with a legend, a center label, and a table view). */
+  --chart-donut-enrolled: #8cc544;
+  --chart-donut-certified: #0b73b7;
+  --chart-donut-dropout: #b91c1c;
+
+  /* Page wash behind the cards (see body below). */
+  --page-bg: #edf4f9;
+  --page-tint-from: rgba(11, 115, 183, 0.07);
+  --page-tint-to: rgba(140, 197, 68, 0.09);
+}
+
+/* ── Dark theme ────────────────────────────────────────────────
+   Not an inversion: its own deep blue-charcoal surfaces from the brand
+   world, with the 600–950 text steps re-stepped to light blues/greens so
+   links and accents stay legible. Solid fills (--color-brand-solid) and the
+   200–500 decorative mid-steps stay put. */
+.dark {
+  color-scheme: dark;
+
+  --color-surface: #101c28;
+  --color-surface-muted: #0b141d;
+  --color-ink: #d7e3ed;
+  --color-ink-muted: #93a5b4;
+  --color-ink-strong: #f3f8fc;
+  --color-edge: #223648;
+
+  /* Faint tints: light-mode 50/100/200 become deep brand-tinted surfaces so
+     every gradient and chip re-skins without touching markup. */
+  --color-brand-50: #0f2334;
+  --color-brand-100: #132a3e;
+  --color-brand-200: #1b3a52;
+  --color-accent-50: #16230e;
+  --color-accent-100: #1c2d12;
+  --color-accent-200: #274018;
+
+  /* Text steps: deep-on-light becomes light-on-deep. */
+  --color-brand-600: #52a5dc;
+  --color-brand-700: #66b2e4;
+  --color-brand-800: #8fc6ec;
+  --color-brand-850: #a5d2f1;
+  --color-brand-900: #bcdef5;
+  --color-brand-950: #d8ecfa;
+  --color-accent-600: #8cc544;
+  --color-accent-700: #a3d45c;
+  --color-accent-800: #badf82;
+  --color-accent-900: #cfe9a4;
+  --color-accent-950: #e4f3c8;
+
+  /* Dark chart pair validated on surface #101c28: #2e8ac9 + #6da800
+     (lightness band 0.48–0.67, CVD ΔE 24.7, normal 26.4, contrast ≥3:1). */
+  --chart-series-1: #2e8ac9;
+  --chart-series-2: #6da800;
+  --chart-grid: #223648;
+  --chart-axis-ink: #93a5b4;
+  --chart-surface: #101c28;
+
+  /* Enrolment donut — re-stepped for #101c28 (the light-mode red fails CVD
+     separation from the dark-mode green there; #dc2626 is the shade that
+     passes — all checks pass, see chart-palette.ts). */
+  --chart-donut-enrolled: #6da800;
+  --chart-donut-certified: #2e8ac9;
+  --chart-donut-dropout: #dc2626;
+
+  --page-bg: #060d14;
+  --page-tint-from: rgba(11, 115, 183, 0.12);
+  --page-tint-to: rgba(140, 197, 68, 0.07);
+}
+
+/* ── Always-light scope ────────────────────────────────────────
+   Pins a subtree to the original light design regardless of the user's
+   theme (used by app/auth/layout.tsx for the sign-in/sign-up pages).
+   Every token the `.dark` block above overrides is re-declared here with
+   its light value — keep the two lists in sync when adding tokens. */
+.theme-light {
+  color-scheme: light;
+
+  --color-surface: #ffffff;
+  --color-surface-muted: #f3f7fa;
+  --color-ink: #0e1d29;
+  --color-ink-muted: #6f6f6f;
+  --color-ink-strong: #000000;
+  --color-edge: #dde8ef;
+
+  --color-brand-50: #eaf4fc;
+  --color-brand-100: #d6e9f7;
+  --color-brand-200: #c2dbf3;
+  --color-accent-50: #f5faeb;
+  --color-accent-100: #e8f4d1;
+  --color-accent-200: #d3eaa8;
+
+  --color-brand-600: #1584c9;
+  --color-brand-700: #0b73b7;
+  --color-brand-800: #005a94;
+  --color-brand-850: #004d80;
+  --color-brand-900: #003d66;
+  --color-brand-950: #00263f;
+  --color-accent-600: #6da800;
+  --color-accent-700: #558124;
+  --color-accent-800: #446621;
+  --color-accent-900: #3a561f;
+  --color-accent-950: #1d2f0c;
+
+  --page-bg: #edf4f9;
+  --page-tint-from: rgba(11, 115, 183, 0.07);
+  --page-tint-to: rgba(140, 197, 68, 0.09);
+}
+
+/* The auth pages sit directly on <body>, whose wash goes dark with the
+   theme — this reproduces the body's light wash inside the pinned scope. */
+.theme-light-page {
+  background-color: var(--page-bg);
+  background-image: linear-gradient(160deg, var(--page-tint-from) 0%, rgba(255, 255, 255, 0) 50%, var(--page-tint-to) 100%);
 }
 
 /* ── Logo intro (app boot animation) ────────────────────────────
@@ -174,11 +316,12 @@
 }
 
 body {
-  /* Soft blue→green wash instead of stark white, so tinted cards read as
-     layered surfaces rather than blending into the page. Fixed so it stays
-     put while content scrolls. */
-  background-color: #edf4f9;
-  background-image: linear-gradient(160deg, rgba(11, 115, 183, 0.07) 0%, rgba(255, 255, 255, 0) 50%, rgba(140, 197, 68, 0.09) 100%);
+  /* Soft blue→green wash instead of a stark flat ground, so tinted cards
+     read as layered surfaces rather than blending into the page. Fixed so it
+     stays put while content scrolls. Tokenised so the dark theme swaps in
+     its own deep wash. */
+  background-color: var(--page-bg);
+  background-image: linear-gradient(160deg, var(--page-tint-from) 0%, rgba(255, 255, 255, 0) 50%, var(--page-tint-to) 100%);
   background-attachment: fixed;
   color: var(--color-ink);
   font-family: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
@@ -264,6 +407,29 @@ h3 em,
 
 .portal-glow:hover::before {
   opacity: 1;
+}
+
+/* Dark theme: quieter tint fill (the light one would grey the card out) and
+   deeper, larger shadows so elevation still reads on a dark ground. */
+.dark .portal-glow {
+  background-image: linear-gradient(150deg, rgba(11, 115, 183, 0.14) 0%, rgba(140, 197, 68, 0.1) 100%);
+  box-shadow:
+    0 0 0 1px rgba(82, 165, 220, 0.08),
+    0 8px 24px -10px rgba(0, 0, 0, 0.55);
+}
+
+.dark .portal-glow:hover {
+  box-shadow:
+    0 0 0 1px rgba(82, 165, 220, 0.18),
+    0 16px 36px -12px rgba(0, 0, 0, 0.65);
+}
+
+.dark .portal-glow::before {
+  opacity: 0.3;
+}
+
+.dark .portal-glow:hover::before {
+  opacity: 0.8;
 }
 
 /* Opt-out of the tint fill for cards that should stay plain white (e.g. the

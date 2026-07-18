@@ -14,7 +14,7 @@ export default function NotFound() {
       <div className="mt-8 flex flex-wrap justify-center gap-3">
         <Link
           href="/auth/login"
-          className="inline-flex items-center gap-2 rounded-full bg-brand-700 px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-brand-800"
+          className="inline-flex items-center gap-2 rounded-full bg-brand-solid px-6 py-3 text-sm font-bold text-white transition-colors hover:bg-brand-solid-deep"
         >
           Back to login
         </Link>

@@ -37,12 +37,24 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${montserrat.variable} h-full antialiased`}>
-      <body className="flex min-h-full flex-col bg-white">
+    // suppressHydrationWarning: the theme script below adds `.dark` to <html>
+    // before React hydrates, so the server- and client-rendered class attrs
+    // can legitimately differ.
+    <html lang="en" className={`${montserrat.variable} h-full antialiased`} suppressHydrationWarning>
+      <head>
+        {/* Applies the saved theme before first paint — without this, a
+            dark-theme user gets a white flash on every navigation. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if(localStorage.getItem("smit-theme")==="dark")document.documentElement.classList.add("dark")}catch(e){}`,
+          }}
+        />
+      </head>
+      <body className="flex min-h-full flex-col bg-surface">
         <LogoIntro />
         <a
           href="#main-content"
-          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-full focus:bg-brand-700 focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:text-white"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-full focus:bg-brand-solid focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:text-white"
         >
           Skip to main content
         </a>

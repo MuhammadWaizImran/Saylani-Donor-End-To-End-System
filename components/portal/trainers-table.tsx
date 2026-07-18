@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import type { Trainer } from "@/types/management";
-import { Avatar, MiniProgress, TableShell, Td, Th } from "@/components/portal/ui";
+import { Avatar, TableShell, Td, Th } from "@/components/portal/ui";
 import {
   PaginationBar,
   ResultsCount,
@@ -43,50 +45,52 @@ export function TrainersTable({
 
       <ResultsCount isPending={isPending} total={total} page={page} pageSize={pageSize} noun="trainers" />
 
-      <TableShell minWidth={920}>
+      <TableShell minWidth={820}>
         <thead>
           <tr className="border-b border-edge bg-surface-muted">
             <Th>Trainer</Th>
             <Th>Campus</Th>
             <Th>Specialization</Th>
-            <Th>Salary</Th>
+            <Th>Hourly rate</Th>
             <Th>Students</Th>
-            <Th>Batches</Th>
-            <Th>Placed</Th>
-            <Th>Performance</Th>
+            <Th>Class slots</Th>
+            <Th />
           </tr>
         </thead>
         <tbody className={cn("divide-y divide-edge", isPending && "opacity-50")}>
           {trainers.map((t) => (
-            <tr key={t.id} className="hover:bg-surface-muted/60">
+            <tr key={t.id} className="group cursor-pointer hover:bg-surface-muted/60">
               <Td>
-                <div className="flex items-center gap-3">
+                <Link href={`/portal/admin/trainers/${t.id}`} className="flex items-center gap-3">
                   <Avatar name={t.name} />
                   <div>
-                    <p className="font-semibold text-ink">{t.name}</p>
+                    <p className="font-semibold text-ink group-hover:text-brand-700">{t.name}</p>
                     <p className="text-xs text-ink-muted">{t.email}</p>
                   </div>
-                </div>
+                </Link>
               </Td>
               <Td className="text-ink-muted">{t.campusName}</Td>
               <Td className="text-ink-muted">{t.specialization}</Td>
               <Td>
                 <span className="font-semibold text-ink">{formatCurrency(t.salary)}</span>
-                <span className="block text-xs text-ink-muted">per month</span>
+                <span className="block text-xs text-ink-muted">per hour</span>
               </Td>
               <Td className="font-semibold text-ink">{t.studentCount}</Td>
               <Td className="font-semibold text-ink">{t.batchesCount}</Td>
               <Td>
-                <span className="font-bold text-accent-700">{t.placedCount}</span>
-              </Td>
-              <Td>
-                <MiniProgress percent={t.performancePercent} />
+                <Link
+                  href={`/portal/admin/trainers/${t.id}`}
+                  aria-label={`View ${t.name}'s profile`}
+                  className="inline-flex text-ink-muted transition-colors group-hover:text-brand-700"
+                >
+                  <ChevronRight className="h-4 w-4" aria-hidden />
+                </Link>
               </Td>
             </tr>
           ))}
           {trainers.length === 0 && (
             <tr>
-              <td colSpan={8} className="px-4 py-12 text-center text-ink-muted">
+              <td colSpan={7} className="px-4 py-12 text-center text-ink-muted">
                 No trainers match your search.
               </td>
             </tr>

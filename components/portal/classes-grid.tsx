@@ -47,7 +47,7 @@ export function ClassesGrid({
 
       <div className={cn("grid gap-5 md:grid-cols-2 xl:grid-cols-3", isPending && "opacity-50")}>
         {classes.map((cls) => (
-          <article key={cls.id} className="portal-glow rounded-2xl border border-edge bg-white p-6">
+          <article key={cls.id} className="portal-glow rounded-2xl border border-edge bg-surface p-6">
             <div className="flex items-center justify-between gap-2">
               <span className="rounded-full bg-accent-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-800">
                 Live batch
@@ -57,7 +57,7 @@ export function ClassesGrid({
                 {cls.studentCount} students
               </span>
             </div>
-            <h2 className="mt-4 font-display text-2xl text-black">{cls.name}</h2>
+            <h2 className="mt-4 font-display text-2xl text-ink-strong">{cls.name}</h2>
             <p className="mt-1 text-sm text-ink-muted">{cls.courseName}</p>
 
             <dl className="mt-5 space-y-2 border-t border-edge pt-4 text-sm">

@@ -1,0 +1,60 @@
+name: CI
+
+# Gates every push/PR with the same checks already run locally before each
+# change: type-check, lint, and a production build. The end-to-end suite
+# (scripts/e2e-test.ts) needs a real MongoDB + Groq connection, so it only
+# runs when those secrets are configured on the repo — see the job below.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build:
+    name: Type-check, lint & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
+        env:
+          # Build-time only: pages are force-dynamic, so nothing here needs
+          # to be a real, reachable database — it only has to be present so
+          # module-level `if (!uri) throw` guards don't fail the build.
+          MONGODB_URI: ${{ secrets.MONGODB_URI || 'mongodb://placeholder/ci' }}
+          AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET || 'ci-placeholder-secret' }}
+
+  e2e:
+    name: End-to-end suite (live data)
+    runs-on: ubuntu-latest
+    needs: build
+    # Skips cleanly until the repo's real secrets are added in GitHub →
+    # Settings → Secrets and variables → Actions — never hard-fails CI on a
+    # missing secret in the meantime.
+    if: ${{ vars.E2E_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+      - run: npm run start &
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      - run: npx wait-on http://localhost:3000
+      - run: npm run e2e
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}

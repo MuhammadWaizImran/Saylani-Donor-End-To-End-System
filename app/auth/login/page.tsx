@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { GraduationCap, HandCoins, LogIn, ShieldCheck } from "lucide-react";
 import type { UserRole } from "@/types/management";
 import { login } from "@/lib/auth";
+import { SaylaniLogo } from "@/components/ui/logo";
 import { cn } from "@/lib/utils";
 
 const roles: Array<{ id: UserRole; label: string; icon: typeof ShieldCheck; hint: string }> = [
@@ -53,13 +54,15 @@ export default function LoginPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
       >
-        <p className="mb-3 text-center text-xs font-semibold uppercase tracking-[0.2em] text-accent-600">
-          Saylani portal
-        </p>
-        <h1 className="text-center font-display text-4xl tracking-tight text-black sm:text-5xl">
-          Welcome <em className="text-[#6F6F6F]">back</em>
+        {/* The artwork already carries the Saylani wordmark, so it stands in
+            for the "Saylani portal" eyebrow that used to sit here. */}
+        <div className="mb-6 flex justify-center">
+          <SaylaniLogo width={210} />
+        </div>
+        <h1 className="text-center font-display text-4xl tracking-tight text-ink-strong sm:text-5xl">
+          Welcome <em className="text-ink-muted">back</em>
         </h1>
-        <p className="mt-3 text-center text-sm text-[#6F6F6F]">
+        <p className="mt-3 text-center text-sm text-ink-muted">
           Log in to your dashboard to see the impact in motion.
         </p>
 
@@ -81,7 +84,7 @@ export default function LoginPage() {
               }}
               className={cn(
                 "flex items-center justify-center gap-1.5 rounded-full px-3 py-2.5 text-sm font-semibold transition-colors",
-                role === id ? "bg-brand-700 text-white shadow" : "text-[#6F6F6F] hover:text-black",
+                role === id ? "bg-brand-solid text-white shadow" : "text-ink-muted hover:text-ink-strong",
               )}
             >
               <Icon className="h-4 w-4" aria-hidden />
@@ -102,7 +105,7 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
-              className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+              className="mt-2 w-full rounded-xl border-2 border-edge bg-surface px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
             />
           </div>
           <div>
@@ -116,12 +119,12 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+              className="mt-2 w-full rounded-xl border-2 border-edge bg-surface px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
             />
           </div>
 
           {error && (
-            <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+            <p role="alert" className="rounded-xl bg-red-50 dark:bg-red-950/40 px-4 py-3 text-sm font-medium text-red-700 dark:text-red-300">
               {error}
             </p>
           )}
@@ -129,7 +132,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={busy}
-            className="flex w-full items-center justify-center gap-2 rounded-full bg-brand-700 px-6 py-3.5 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-60"
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-brand-solid px-6 py-3.5 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-60"
           >
             <LogIn className="h-4 w-4 text-accent-400" aria-hidden />
             {busy ? "Logging in…" : `Log in as ${activeRole.label}`}
@@ -140,12 +143,12 @@ export default function LoginPage() {
           Demo account — <span className="font-semibold">{activeRole.hint}</span>
         </p>
 
-        <p className="mt-6 text-center text-sm text-[#6F6F6F]">
-          No account yet?{" "}
+        <p className="mt-6 text-center text-sm text-ink-muted">
+          Want to support our campaigns?{" "}
           <Link href="/auth/signup" className="font-semibold text-brand-700 hover:underline">
-            Sign up
-          </Link>{" "}
-          as a donor or admin.
+            Sign up as a donor
+          </Link>
+          . Admin and trainer accounts are provided by Saylani.
         </p>
       </motion.div>
     </div>

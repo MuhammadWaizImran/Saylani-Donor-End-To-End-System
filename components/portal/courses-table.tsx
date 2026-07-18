@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import type { Course, CourseStatus } from "@/types/management";
 import { Pill, TableShell, Td, Th } from "@/components/portal/ui";
 import {
@@ -57,7 +59,7 @@ export function CoursesTable({
           id="filter-course-status"
           value={searchParams.get("status") ?? ""}
           onChange={(e) => setParams({ status: e.target.value, page: "" })}
-          className="rounded-xl border border-edge bg-white px-3 py-2.5 text-sm font-medium text-ink focus:border-brand-500 focus:outline-none"
+          className="rounded-xl border border-edge bg-surface px-3 py-2.5 text-sm font-medium text-ink focus:border-brand-500 focus:outline-none"
         >
           <option value="">Any status</option>
           <option value="running">Running</option>
@@ -77,14 +79,17 @@ export function CoursesTable({
             <Th>Trainer</Th>
             <Th>Enrolled</Th>
             <Th>Duration</Th>
+            <Th />
           </tr>
         </thead>
         <tbody className={cn("divide-y divide-edge", isPending && "opacity-50")}>
           {courses.map((c) => (
-            <tr key={c.id} className="hover:bg-surface-muted/60">
+            <tr key={c.id} className="group cursor-pointer hover:bg-surface-muted/60">
               <Td>
-                <span className="font-semibold text-ink">{c.name}</span>
-                <span className="block text-xs text-ink-muted">Started {c.startedAt}</span>
+                <Link href={`/portal/admin/courses/${c.id}`}>
+                  <span className="font-semibold text-ink group-hover:text-brand-700">{c.name}</span>
+                  <span className="block text-xs text-ink-muted">Started {c.startedAt}</span>
+                </Link>
               </Td>
               <Td className="text-ink-muted">{c.campusName}</Td>
               <Td>
@@ -93,11 +98,20 @@ export function CoursesTable({
               <Td className="text-ink-muted">{c.trainerName}</Td>
               <Td className="font-semibold text-ink">{c.enrolledCount}</Td>
               <Td className="text-ink-muted">{c.durationMonths > 0 ? `${c.durationMonths} months` : "—"}</Td>
+              <Td>
+                <Link
+                  href={`/portal/admin/courses/${c.id}`}
+                  aria-label={`View ${c.name} details`}
+                  className="inline-flex text-ink-muted transition-colors group-hover:text-brand-700"
+                >
+                  <ChevronRight className="h-4 w-4" aria-hidden />
+                </Link>
+              </Td>
             </tr>
           ))}
           {courses.length === 0 && (
             <tr>
-              <td colSpan={6} className="px-4 py-12 text-center text-ink-muted">
+              <td colSpan={7} className="px-4 py-12 text-center text-ink-muted">
                 No courses match your search.
               </td>
             </tr>

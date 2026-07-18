@@ -5,7 +5,7 @@
  * - Trainers only ever see their own students/courses/classes/placements.
  * - Write tools (create_x / record_x) are ADMIN ONLY.
  */
-import type { AgentContext } from "@/lib/ai/mock-brain";
+import type { AgentContext } from "@/lib/ai/context";
 import {
   getCampuses,
   getCourses,
@@ -38,7 +38,7 @@ export const toolDefinitions = [
     function: {
       name: "get_org_stats",
       description:
-        "Organization-wide totals: campuses, students, trainers, running courses, active classes, placements, average salary/progress/attendance.",
+        "Organization-wide totals: campuses, students, trainers, running courses, active classes. Placements, average salary, average progress, and average attendance are NOT tracked in the database — this tool does not return them and you must never estimate them.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -47,7 +47,7 @@ export const toolDefinitions = [
     function: {
       name: "list_campuses",
       description:
-        "All Saylani campuses with city, student/trainer/course counts, placement rate, and overall progress percent.",
+        "All Saylani campuses with city and their student, trainer, and course counts.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -56,15 +56,13 @@ export const toolDefinitions = [
     function: {
       name: "list_students",
       description:
-        "Student profiles with campus, course, trainer, enrollment status, progress %, attendance %, and placement info. Trainers automatically see only their own students.",
+        "Student profiles with campus, course, trainer, and enrollment status. Trainers automatically see only their own students. Course progress, attendance %, and job placement are NOT tracked per student — this tool cannot return them and you must not estimate them.",
       parameters: {
         type: "object",
         properties: {
-          campus: { type: "string", description: "Filter to one campus — name (e.g. 'Gulshan Head Campus') or id. Use list_campuses first if unsure of the exact name." },
+          campus: { type: "string", description: "Filter to one campus — name (e.g. 'Bahdurabad') or id. Use list_campuses first if unsure of the exact name." },
           course: { type: "string", description: "Filter to one course — name (e.g. 'Web & Mobile App Development') or id. Use list_courses first if unsure of the exact name." },
           enrollment_status: { type: "string", enum: ["active", "inactive"] },
-          placement_status: { type: "string", enum: ["placed", "seeking", "studying"] },
-          max_attendance_percent: { type: "number", description: "Only students at or below this attendance (at-risk queries)" },
         },
         required: [],
       },
@@ -75,7 +73,7 @@ export const toolDefinitions = [
     function: {
       name: "list_trainers",
       description:
-        "All trainers with campus, specialization, salary, students, batches, placements, performance. (Trainers get only their own profile.)",
+        "All trainers with campus, specialization, hourly rate, active students, and batches taught. (Trainers get only their own profile.) Placement counts and performance scores are NOT tracked — never invent them.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -83,7 +81,7 @@ export const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "list_courses",
-      description: "Courses with campus, trainer, status, enrollment, duration, progress. Trainers see only their own.",
+      description: "Courses with campus, trainer, status, enrollment, and duration. Trainers see only their own. Course completion progress is NOT tracked — never estimate it.",
       parameters: {
         type: "object",
         properties: { status: { type: "string", enum: ["running", "completed", "upcoming"] } },
@@ -176,7 +174,7 @@ export const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "create_trainer",
-      description: "ADMIN ONLY: add a new trainer. campus accepts a name or id.",
+      description: "ADMIN ONLY: add a new trainer. campus accepts a name or id. Trainers are paid hourly, not monthly.",
       parameters: {
         type: "object",
         properties: {
@@ -184,9 +182,9 @@ export const toolDefinitions = [
           email: { type: "string" },
           campus: { type: "string" },
           specialization: { type: "string" },
-          monthly_salary_pkr: { type: "number" },
+          hourly_rate_pkr: { type: "number" },
         },
-        required: ["name", "email", "campus", "specialization", "monthly_salary_pkr"],
+        required: ["name", "email", "campus", "specialization", "hourly_rate_pkr"],
       },
     },
   },
@@ -245,7 +243,7 @@ export const toolDefinitions = [
           fields: {
             type: "object",
             description:
-              "Only the fields to change, e.g. {\"progress_percent\": 80, \"placement_status\": \"placed\"} for a student, or {\"salary\": 190000} for a trainer. Field names match the create_* tool argument names for that entity (campus/course/trainer/trainer values are names, resolved automatically).",
+              "Only the fields to change, e.g. {\"email\": \"ali@example.com\", \"campus\": \"Bahdurabad\"} for a student, or {\"hourly_rate_pkr\": 1200} for a trainer. Field names match the create_* tool argument names for that entity (campus/course/trainer values are names, resolved automatically).",
             additionalProperties: true,
           },
         },
@@ -402,6 +400,17 @@ export async function executeTool(
   ctx: AgentContext,
 ): Promise<string> {
   const trainer = ctx.role === "trainer" ? await getTrainer(ctx.userEmail) : null;
+
+  // A trainer whose own record can't be resolved must NOT fall through to the
+  // list tools — there, `trainerId: trainer?.id` becomes undefined, the filter
+  // drops, and they'd see the whole organization's students/courses/classes.
+  // Refuse instead.
+  if (ctx.role === "trainer" && !trainer) {
+    return err(
+      "I couldn't find your trainer profile, so I can't safely load your data. Please contact an admin to check your account.",
+    );
+  }
+
   const db = await mongo();
 
   /* Writes are admin-only. */
@@ -418,8 +427,20 @@ export async function executeTool(
 
   switch (name) {
     /* ── reads ──────────────────────────────────────────── */
-    case "get_org_stats":
-      return JSON.stringify(await getOrgStats());
+    case "get_org_stats": {
+      // Only the counts that are genuinely backed by the database. OrgStats
+      // still carries placement/progress/attendance fields that are hardcoded
+      // zeros; handing those to the model made it report "0% placement rate
+      // across all campuses" as if it were a measured fact.
+      const st = await getOrgStats();
+      return JSON.stringify({
+        total_campuses: st.totalCampuses,
+        total_students: st.totalStudents,
+        total_trainers: st.totalTrainers,
+        running_courses: st.runningCourses,
+        active_classes: st.activeClasses,
+      });
+    }
 
     case "list_campuses": {
       // Server-side pagination — never pulls the whole (potentially huge) table.
@@ -430,8 +451,6 @@ export async function executeTool(
         students: c.studentCount,
         trainers: c.trainerCount,
         courses: c.courseCount,
-        placement_rate: c.placementRate,
-        progress_percent: c.progressPercent,
       }));
       if (total <= rows.length) return JSON.stringify(rows);
       return JSON.stringify({
@@ -469,9 +488,6 @@ export async function executeTool(
         campusId,
         courseId,
         enrollmentStatus: typeof args.enrollment_status === "string" ? args.enrollment_status : undefined,
-        placementStatus: typeof args.placement_status === "string" ? args.placement_status : undefined,
-        maxAttendance:
-          typeof args.max_attendance_percent === "number" ? args.max_attendance_percent : undefined,
         pageSize: 40,
       });
       const [campusName, courseName, trainerName] = await Promise.all([
@@ -487,12 +503,6 @@ export async function executeTool(
         course: courseName[s.courseId] ?? s.courseId,
         trainer: trainerName[s.trainerId] ?? s.trainerId,
         enrollment_status: s.enrollmentStatus,
-        progress_percent: s.progressPercent,
-        attendance_percent: s.attendancePercent,
-        placement_status: s.placementStatus,
-        company: s.company ?? null,
-        monthly_salary_pkr: s.salary ?? null,
-        placement_date: s.placementDate ?? null,
       }));
       if (total <= rows.length) return JSON.stringify(rows);
       return JSON.stringify({
@@ -512,11 +522,9 @@ export async function executeTool(
         name: t.name,
         campus: campusName[t.campusId] ?? t.campusId,
         specialization: t.specialization,
-        monthly_salary_pkr: t.salary,
+        hourly_rate_pkr: t.salary,
         active_students: t.studentCount,
         batches_taught: t.batchesCount,
-        students_placed: t.placedCount,
-        performance_percent: t.performancePercent,
         joined: t.joinedAt,
       }));
       if (total <= rows.length) return JSON.stringify(rows);
@@ -545,7 +553,6 @@ export async function executeTool(
         status: c.status,
         enrolled: c.enrolledCount,
         duration_months: c.durationMonths,
-        progress_percent: c.progressPercent,
         started: c.startedAt,
       }));
       if (total <= rows.length) return JSON.stringify(rows);
@@ -628,7 +635,7 @@ export async function executeTool(
 
       try {
         const buffer = await buildWordReport({ title, intro, columns, rows, generatedFor: ctx.userName });
-        const { url, filename } = await uploadWordReport(buffer, title);
+        const { url, filename } = await uploadWordReport(buffer, title, ctx.userId);
         return JSON.stringify({
           success: true,
           filename,
@@ -665,7 +672,7 @@ export async function executeTool(
         ur: { trainer_name: argStr(args, "name") },
         email: argStr(args, "email"),
         campus: [oid(campus.id)],
-        hourly_rate: Number(args.monthly_salary_pkr ?? 0),
+        hourly_rate: Number(args.hourly_rate_pkr ?? 0),
         createdAt: new Date(),
       });
       return JSON.stringify({ success: true, id: String(res.insertedId), message: `Trainer "${args.name}" added to ${campus.name}.` });
@@ -790,7 +797,7 @@ export async function executeTool(
           const patch: Record<string, unknown> = {};
           if ("name" in fields) patch["en.trainer_name"] = String(fields.name);
           if ("email" in fields) patch.email = String(fields.email);
-          if ("monthly_salary_pkr" in fields) patch.hourly_rate = Number(fields.monthly_salary_pkr);
+          if ("hourly_rate_pkr" in fields) patch.hourly_rate = Number(fields.hourly_rate_pkr);
           if ("campus" in fields) {
             const campus = matchByName(await getCampuses(), String(fields.campus));
             if (!campus) return err(`Campus not found: "${fields.campus}".`);
@@ -862,10 +869,29 @@ export async function executeTool(
         case "student": {
           const found = await findStudent(identifier);
           if ("error" in found) return err(found.error);
-          // Remove this enrolment; drop the person too if it was their only one.
-          await db.collection("student_inductions").deleteOne({ _id: new ObjectId(found.row.id) });
-          const remaining = await db.collection("student_inductions").countDocuments({ student_id: new ObjectId(found.row.studentId) });
-          if (remaining === 0) await db.collection("students").deleteOne({ _id: new ObjectId(found.row.studentId) });
+          const studentObjectId = new ObjectId(found.row.studentId);
+          const inductionObjectId = new ObjectId(found.row.id);
+          const otherInductions = await db.collection("student_inductions").countDocuments({
+            student_id: studentObjectId,
+            _id: { $ne: inductionObjectId },
+          });
+          // This is the person's only enrolment, so deleting it also removes
+          // their master record — same referential-integrity rule already
+          // applied to trainers/courses/campuses: block if real history
+          // (attendance, fee payments) would be orphaned.
+          if (otherInductions === 0) {
+            const [attendanceDeps, paymentDeps] = await Promise.all([
+              db.collection("attendances").countDocuments({ student_id: idEq(found.row.studentId) }),
+              db.collection("payments").countDocuments({ student: idEq(found.row.studentId) }),
+            ]);
+            if (attendanceDeps > 0 || paymentDeps > 0) {
+              return err(
+                `Can't delete ${found.row.name} — still linked to ${attendanceDeps} attendance records and ${paymentDeps} fee payments. Those must be resolved first.`,
+              );
+            }
+          }
+          await db.collection("student_inductions").deleteOne({ _id: inductionObjectId });
+          if (otherInductions === 0) await db.collection("students").deleteOne({ _id: studentObjectId });
           return JSON.stringify({ success: true, message: `Deleted student ${found.row.name}.` });
         }
 
@@ -922,6 +948,15 @@ export async function executeTool(
           const { classes } = await searchActiveClasses({ pageSize: 50, query: identifier });
           const cls = matchByName(classes, identifier);
           if (!cls) return err(`Active class not found: "${identifier}".`);
+          const [studentDeps, attendanceDeps] = await Promise.all([
+            db.collection("student_inductions").countDocuments({ slot: idEq(cls.id) }),
+            db.collection("attendances").countDocuments({ slot: idEq(cls.id) }),
+          ]);
+          if (studentDeps > 0 || attendanceDeps > 0) {
+            return err(
+              `Can't delete "${cls.name}" — still linked to ${studentDeps} students and ${attendanceDeps} attendance records. Reassign or delete those first.`,
+            );
+          }
           await db.collection("slots").deleteOne({ _id: oid(cls.id) as ObjectId });
           return JSON.stringify({ success: true, message: `Deleted class "${cls.name}".` });
         }

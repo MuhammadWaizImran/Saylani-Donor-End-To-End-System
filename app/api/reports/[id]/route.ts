@@ -25,6 +25,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json({ error: "Report not found" }, { status: 404 });
   }
 
+  // Ownership check — a report belongs to the user who generated it. GridFS
+  // ids are sequential/guessable, so role-gating alone would let any admin or
+  // trainer pull anyone else's export. 404 (not 403) so a probing user can't
+  // even tell whether an id exists. Legacy files with no ownerId are denied.
+  if (file.metadata?.ownerId !== session.userId) {
+    return NextResponse.json({ error: "Report not found" }, { status: 404 });
+  }
+
   const bucket = new GridFSBucket(db, { bucketName: "reports" });
   const chunks: Buffer[] = [];
   try {

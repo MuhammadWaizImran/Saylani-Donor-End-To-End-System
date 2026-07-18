@@ -18,16 +18,25 @@ import { ObjectId } from "mongodb";
 import type {
   ActiveClass,
   AttendanceOverview,
+  BreakdownSlice,
   Campus,
+  CampaignDetail,
   CampaignStatus,
   Course,
+  CourseDetail,
   DonationOverview,
+  DonorDetail,
+  FeeTrendPoint,
+  MyProfile,
   OrgStats,
   PaymentOverview,
   PaymentStatus,
   Student,
+  StudentDetail,
   Trainer,
   TrainerAttendanceOverview,
+  TrainerDetail,
+  TrendPoint,
 } from "@/types/management";
 import { isMongoConfigured, mongo } from "@/lib/mongodb";
 import * as mock from "@/lib/management-mock";
@@ -232,12 +241,20 @@ async function loadCampuses(): Promise<Campus[]> {
       courseCount: agg.courseCount[id] ?? 0,
       placementRate: 0,
       progressPercent: 0,
+      image: s(d.image) || undefined,
     };
   });
 }
 
 export function getCampuses(): Promise<Campus[]> {
   return live(mock.getCampuses, loadCampuses);
+}
+
+export function getCampusById(id: string): Promise<Campus | undefined> {
+  return live(
+    () => mock.getCampuses().find((c) => c.id === id),
+    async () => (await loadCampuses()).find((c) => c.id === id),
+  );
 }
 
 export interface CampusPage {
@@ -356,6 +373,76 @@ export function searchStudents(opts: StudentSearch = {}): Promise<StudentPage> {
   );
 }
 
+/**
+ * One student's complete profile: their personal record, this enrolment's
+ * details, their real class attendance, and their own fee invoices.
+ * `id` is the enrolment (student_induction) id — the same id the list uses.
+ */
+export function getStudentDetail(id: string): Promise<StudentDetail | undefined> {
+  return live(
+    () => undefined,
+    async () => {
+      if (!isHexId(id)) return undefined;
+      const db = await mongo();
+      const [ind] = await db
+        .collection("student_inductions")
+        .aggregate([{ $match: { _id: new ObjectId(id) } }, ...JOIN_STUDENT, { $limit: 1 }])
+        .toArray();
+      if (!ind) return undefined;
+
+      const stu: Doc = ind.stu ?? {};
+      const studentRecordId = s(ind.student_id);
+      const [attRows, payDocs] = await Promise.all([
+        db
+          .collection("attendances")
+          .aggregate([
+            { $match: { student_id: idMatch(studentRecordId) } },
+            { $group: { _id: null, n: { $sum: 1 }, last: { $max: "$time_stamp" } } },
+          ])
+          .toArray(),
+        db.collection("payments").find({ student: idMatch(studentRecordId) }).toArray(),
+      ]);
+
+      const payments = payDocs
+        .map((d) => ({
+          id: s(d._id),
+          studentId: studentRecordId,
+          studentName: s(stu.full_name) || "—",
+          amount: n(d.amount),
+          billingMonth: formatBillingMonth(s(d.billing_month)),
+          dueDate: s(d.due_date),
+          status: normalizePaymentStatus(s(d.status)),
+          type: s(d.type) || "—",
+          invoiceNumber: s(d.blinq_invoice_number),
+        }))
+        .sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1));
+
+      return {
+        ...toStudent(ind),
+        studentRecordId,
+        fatherName: s(stu.father_name),
+        gender: s(stu.gender),
+        dateOfBirth: s(stu.date_of_birth),
+        cnic: s(stu.student_cnic),
+        address: s(stu.full_address),
+        lastQualification: s(stu.last_qualification),
+        image: s(stu.image) || undefined,
+        rollNumber: s(ind.roll_number),
+        batchNumber: n(ind.batch_number),
+        laptop: s(ind.laptop),
+        isSponsored: Boolean(ind.is_sponsored),
+        sponsorMessage: s(ind.sponsor_message),
+        enrolledAt: s(ind.createdAt),
+        classesAttended: n(attRows[0]?.n),
+        lastAttended: s(attRows[0]?.last),
+        payments,
+        totalPaid: payments.filter((p) => p.status === "paid").reduce((sum, p) => sum + p.amount, 0),
+        totalPending: payments.filter((p) => p.status === "pending").reduce((sum, p) => sum + p.amount, 0),
+      };
+    },
+  );
+}
+
 /** Bounded sample of students — for stats/AI context. */
 export function getStudents(): Promise<Student[]> {
   return live(mock.getStudents, async () => {
@@ -400,11 +487,18 @@ export function getAttendanceOverview(): Promise<AttendanceOverview> {
             },
             { $lookup: { from: "students", localField: "_id", foreignField: "_id", as: "stu" } },
             { $unwind: { path: "$stu", preserveNullAndEmptyArrays: true } },
+            // A student may hold several inductions (re-enrolled, second course).
+            // Take only their latest, or the join fans one student out into
+            // several rows — double-counting their check-ins in the totals.
             {
               $lookup: {
                 from: "student_inductions",
-                localField: "_id",
-                foreignField: "student_id",
+                let: { sid: "$_id" },
+                pipeline: [
+                  { $match: { $expr: { $eq: ["$student_id", "$$sid"] } } },
+                  { $sort: { createdAt: -1 } },
+                  { $limit: 1 },
+                ],
                 as: "ind",
               },
             },
@@ -546,6 +640,112 @@ export function getDonationOverview(): Promise<DonationOverview> {
       const totalRaised = campaigns.reduce((sum, c) => sum + c.raisedAmount, 0);
       const activeCampaigns = campaigns.filter((c) => c.status !== "completed").length;
       return { campaigns, donations, donors, totalRaised, totalDonations, activeCampaigns, totalDonors };
+    },
+  );
+}
+
+/** One campaign's full page content plus every donation it has received. */
+export function getCampaignDetail(id: string): Promise<CampaignDetail | undefined> {
+  return live(
+    () => undefined,
+    async () => {
+      const db = await mongo();
+      // Campaign ids are short strings ("c1"), not ObjectIds — hence the cast.
+      const doc = await db
+        .collection("campaigns")
+        .findOne({ $or: [{ id }, { _id: id }] } as Doc);
+      if (!doc) return undefined;
+
+      const campaignId = s(doc.id ?? doc._id);
+      const donationDocs = await db
+        .collection("donations")
+        .find({ campaignId })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .toArray();
+
+      return {
+        id: campaignId,
+        title: s(doc.title) || "—",
+        category: s(doc.category),
+        location: s(doc.location),
+        goalAmount: n(doc.goalAmount),
+        raisedAmount: n(doc.raisedAmount),
+        donorCount: n(doc.donorCount),
+        currency: s(doc.currency) || "PKR",
+        status: (s(doc.status) || "active") as CampaignStatus,
+        endsAt: s(doc.endsAt),
+        slug: s(doc.slug),
+        tagline: s(doc.tagline),
+        description: s(doc.description),
+        story: (Array.isArray(doc.story) ? doc.story : []).map(s).filter(Boolean),
+        imageUrl: s(doc.imageUrl),
+        gallery: (Array.isArray(doc.gallery) ? doc.gallery : []).map(s).filter(Boolean),
+        createdAt: s(doc.createdAt),
+        donations: donationDocs.map((d) => ({
+          id: s(d.id ?? d._id),
+          campaignId,
+          campaignTitle: s(doc.title),
+          donorName: d.isAnonymous ? "Anonymous" : s(d.donorName) || "—",
+          amount: n(d.amount),
+          currency: s(d.currency) || "PKR",
+          isAnonymous: Boolean(d.isAnonymous),
+          message: d.message ? s(d.message) : undefined,
+          createdAt: s(d.createdAt),
+        })),
+      };
+    },
+  );
+}
+
+/**
+ * One donor's full profile plus every donation they've made. Donations link
+ * to donors only by `donorName` in this data (there is no donorId foreign
+ * key), so we match on the name — imperfect if two donors share a name, but
+ * it's the only linkage the source records provide, and the donor's own
+ * stored totalDonated/donationCount stay the authoritative headline figures.
+ */
+export function getDonorById(id: string): Promise<DonorDetail | undefined> {
+  return live(
+    () => undefined,
+    async () => {
+      const db = await mongo();
+      // Donor ids are short strings ("u2"), not ObjectIds — hence the cast.
+      const doc = await db
+        .collection("public_donors")
+        .findOne({ $or: [{ id }, { _id: id }] } as Doc);
+      if (!doc) return undefined;
+
+      const name = s(doc.name) || "—";
+      const [campaignDocs, donationDocs] = await Promise.all([
+        db.collection("campaigns").find({}, { projection: { id: 1, _id: 1, title: 1 } }).toArray(),
+        db.collection("donations").find({ donorName: name }).sort({ createdAt: -1 }).limit(50).toArray(),
+      ]);
+      const titleById = new Map(campaignDocs.map((c) => [s(c.id ?? c._id), s(c.title)]));
+
+      const donations = donationDocs.map((d) => ({
+        id: s(d.id ?? d._id),
+        campaignId: s(d.campaignId),
+        campaignTitle: titleById.get(s(d.campaignId)) ?? "—",
+        donorName: d.isAnonymous ? "Anonymous" : s(d.donorName) || "—",
+        amount: n(d.amount),
+        currency: s(d.currency) || "PKR",
+        isAnonymous: Boolean(d.isAnonymous),
+        message: d.message ? s(d.message) : undefined,
+        createdAt: s(d.createdAt),
+      }));
+
+      return {
+        id: s(doc.id ?? doc._id),
+        name,
+        email: s(doc.email),
+        phone: doc.phone ? s(doc.phone) : undefined,
+        totalDonated: n(doc.totalDonated),
+        donationCount: n(doc.donationCount),
+        memberSince: s(doc.memberSince),
+        donations,
+        campaignCount: new Set(donations.map((d) => d.campaignId)).size,
+      };
     },
   );
 }
@@ -716,6 +916,59 @@ export function getTrainer(idOrEmail: string): Promise<Trainer | undefined> {
   );
 }
 
+/**
+ * One trainer's complete profile: their record, every campus they're assigned
+ * to, and their real check-in history from `trainer_attendances`.
+ */
+export function getTrainerDetail(id: string): Promise<TrainerDetail | undefined> {
+  return live(
+    () => undefined,
+    async () => {
+      if (!isHexId(id)) return undefined;
+      const db = await mongo();
+      const [doc, base, attRows] = await Promise.all([
+        db.collection("trainers").findOne({ _id: new ObjectId(id) }),
+        getTrainer(id),
+        db
+          .collection("trainer_attendances")
+          .aggregate([
+            { $match: { trainer: idMatch(id), status: { $ne: "deleted" } } },
+            {
+              $group: {
+                _id: null,
+                sessions: { $sum: 1 },
+                totalMinutes: { $sum: { $ifNull: ["$minutes", 0] } },
+                lateSessions: {
+                  $sum: { $cond: [{ $gt: [{ $ifNull: ["$late_check_in_minutes", 0] }, 0] }, 1, 0] },
+                },
+                lastCheckIn: { $max: "$check_in" },
+              },
+            },
+          ])
+          .toArray(),
+      ]);
+      if (!doc || !base) return undefined;
+
+      const links = Array.isArray(doc.social_links) ? (doc.social_links as Doc[]) : [];
+      return {
+        ...base,
+        image: s(doc.image) || undefined,
+        phone: s(doc.phone_number),
+        description: s(doc.description),
+        employeeId: s(doc.employee_id),
+        socialLinks: links
+          .map((l) => ({ name: s(l.name), url: s(l.url) }))
+          .filter((l) => l.name && l.url),
+        campusIds: (Array.isArray(doc.campus) ? doc.campus : [doc.campus]).filter(Boolean).map(s),
+        sessions: n(attRows[0]?.sessions),
+        totalMinutes: n(attRows[0]?.totalMinutes),
+        lateSessions: n(attRows[0]?.lateSessions),
+        lastCheckIn: s(attRows[0]?.lastCheckIn),
+      };
+    },
+  );
+}
+
 /* ── courses (from `new_courses` offerings) ────────────────── */
 async function loadCourses(): Promise<Course[]> {
   const db = await mongo();
@@ -758,6 +1011,49 @@ async function loadCourses(): Promise<Course[]> {
 
 export function getCourses(): Promise<Course[]> {
   return live(mock.getCourses, loadCourses);
+}
+
+/**
+ * One course offering's complete detail: the batch (`new_courses`) joined to
+ * its catalog entry (`courses`), which is where the description, outline, and
+ * cover image live.
+ */
+export function getCourseDetail(id: string): Promise<CourseDetail | undefined> {
+  return live(
+    () => undefined,
+    async () => {
+      if (!isHexId(id)) return undefined;
+      const db = await mongo();
+      const [offering, base] = await Promise.all([
+        db.collection("new_courses").findOne({ _id: new ObjectId(id) }),
+        (await loadCourses()).find((c) => c.id === id),
+      ]);
+      if (!offering || !base) return undefined;
+
+      const catalog = offering.course
+        ? await db.collection("courses").findOne({ _id: offering.course })
+        : null;
+      const en: Doc = catalog?.en ?? {};
+      const categoryId = s(en.course_category);
+      const categoryDoc = categoryId && isHexId(categoryId)
+        ? await db.collection("course_categories").findOne({ _id: new ObjectId(categoryId) })
+        : null;
+
+      return {
+        ...base,
+        coverImage: s(catalog?.cover_image) || undefined,
+        category: s(categoryDoc?.en?.category_name) || s(categoryDoc?.en?.name) || "—",
+        durationText: s(en.course_duration),
+        description: s(en.description),
+        outline: (Array.isArray(en.outline) ? en.outline : []).map(s).filter(Boolean),
+        instructions: (Array.isArray(offering.instruction) ? offering.instruction : []).map(s).filter(Boolean),
+        batchNumber: n(offering.batch_number),
+        fees: n(offering.fees),
+        gender: (Array.isArray(offering.gender?.en) ? offering.gender.en : []).map(s).filter(Boolean),
+        campusIds: (Array.isArray(offering.campuses) ? offering.campuses : []).filter(Boolean).map(s),
+      };
+    },
+  );
 }
 
 export interface CourseSearch {
@@ -872,6 +1168,242 @@ export function searchActiveClasses(opts: ClassSearch = {}): Promise<ClassPage> 
     return { classes: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize };
   };
   return live(() => paginate(mock.getActiveClasses()), async () => paginate(await loadActiveClasses()));
+}
+
+/* ── chart series ──────────────────────────────────────────────
+ * Bucketed aggregates for the dashboard charts. Each is built directly from
+ * the real collections and only spans the months the data itself covers —
+ * we never pad the ends with invented zeros to make a trend look longer. */
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_LONG = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** "2501" (YYMM, the billing_month format) → axis + tooltip labels. */
+function labelsFromYYMM(ym: string) {
+  const mi = Number(ym.slice(2)) - 1;
+  const yy = ym.slice(0, 2);
+  if (mi < 0 || mi > 11) return { label: ym, fullLabel: ym };
+  return { label: `${MONTH_SHORT[mi]} ${yy}`, fullLabel: `${MONTH_LONG[mi]} 20${yy}` };
+}
+
+/** "2025-02" ($dateToString %Y-%m) → axis + tooltip labels. */
+function labelsFromISOMonth(ym: string) {
+  const [y, m] = ym.split("-");
+  const mi = Number(m) - 1;
+  if (!y || mi < 0 || mi > 11) return { label: ym, fullLabel: ym };
+  return { label: `${MONTH_SHORT[mi]} ${y.slice(2)}`, fullLabel: `${MONTH_LONG[mi]} ${y}` };
+}
+
+/**
+ * Fee billing per month, split into collected vs still outstanding.
+ * Grouped in memory because `payments.status` is dirty in the real data
+ * (see normalizePaymentStatus) — a $group on the raw field would mis-bucket.
+ */
+export function getFeeTrend(): Promise<FeeTrendPoint[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const docs = await db
+        .collection("payments")
+        .find({}, { projection: { billing_month: 1, amount: 1, status: 1 } })
+        .toArray();
+
+      const byMonth = new Map<string, { collected: number; outstanding: number }>();
+      for (const d of docs) {
+        const ym = s(d.billing_month);
+        if (!/^\d{4}$/.test(ym)) continue;
+        const bucket = byMonth.get(ym) ?? { collected: 0, outstanding: 0 };
+        if (normalizePaymentStatus(s(d.status)) === "paid") bucket.collected += n(d.amount);
+        else bucket.outstanding += n(d.amount);
+        byMonth.set(ym, bucket);
+      }
+      return [...byMonth.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([ym, v]) => ({ ...labelsFromYYMM(ym), ...v }));
+    },
+  );
+}
+
+/** New enrolments per month, from each induction's creation date. */
+export function getEnrolmentTrend(): Promise<TrendPoint[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const rows = await db
+        .collection("student_inductions")
+        .aggregate([
+          { $match: { createdAt: { $ne: null } } },
+          { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }, n: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ])
+        .toArray();
+      return rows.map((r) => ({ ...labelsFromISOMonth(s(r._id)), value: n(r.n) }));
+    },
+  );
+}
+
+/** Class check-ins per month, from the real `attendances` log. */
+export function getAttendanceTrend(): Promise<TrendPoint[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const rows = await db
+        .collection("attendances")
+        .aggregate([
+          { $match: { time_stamp: { $ne: null } } },
+          { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$time_stamp" } } }, n: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ])
+        .toArray();
+      return rows.map((r) => ({ ...labelsFromISOMonth(s(r._id)), value: n(r.n) }));
+    },
+  );
+}
+
+/**
+ * Enrolments broken down by the training system's REAL status values
+ * (enrolled / pending / passed / completed / dropout / …) — richer and more
+ * honest than the active-vs-inactive binary the list pages derive.
+ */
+export function getEnrolmentStatusBreakdown(): Promise<BreakdownSlice[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const rows = await db
+        .collection("student_inductions")
+        .aggregate([{ $group: { _id: "$status", n: { $sum: 1 } } }, { $sort: { n: -1 } }])
+        .toArray();
+      return rows.map((r) => {
+        const raw = s(r._id) || "unknown";
+        return { label: raw.charAt(0).toUpperCase() + raw.slice(1), value: n(r.n) };
+      });
+    },
+  );
+}
+
+/** Which of the 7 real enrolment statuses count as "still enrolled",
+ *  "certified", or "left the pipeline" — same active/graduated split already
+ *  used for the student list's derived enrollment/placement flags. */
+const ENROLMENT_BUCKETS: Array<{ label: string; statuses: string[] }> = [
+  { label: "Enrolled", statuses: ["enrolled", "pending"] },
+  { label: "Certified", statuses: ["passed", "completed"] },
+  { label: "Dropout", statuses: ["dropout", "rejected", "blacklisted"] },
+];
+
+/**
+ * Rolls the training system's 7 real enrolment statuses (from
+ * getEnrolmentStatusBreakdown) into the 3 groups a summary donut can show at
+ * a glance. "Dropout" here covers every way a student left the pipeline —
+ * dropped out, was rejected, or was blacklisted — a simplification made for
+ * the headline chart; the exact status-by-status counts are still there in
+ * the full breakdown, one click away in the chart's table view.
+ */
+export function summarizeEnrolmentBuckets(breakdown: BreakdownSlice[]): BreakdownSlice[] {
+  return ENROLMENT_BUCKETS.map(({ label, statuses }) => ({
+    label,
+    value: breakdown
+      .filter((b) => statuses.includes(b.label.toLowerCase()))
+      .reduce((sum, b) => sum + b.value, 0),
+  }));
+}
+
+/**
+ * How many students are enrolled on each course in the catalog.
+ *
+ * Every catalog course is returned, including those nobody has enrolled on —
+ * a zero is a real, useful answer here ("this course isn't drawing anyone"),
+ * and dropping it would quietly overstate the catalog's reach.
+ */
+export function getCourseEnrolment(): Promise<BreakdownSlice[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const [counts, courses] = await Promise.all([
+        db
+          .collection("student_inductions")
+          .aggregate([{ $group: { _id: "$course", n: { $sum: 1 } } }])
+          .toArray(),
+        db.collection("courses").find({}, { projection: { "en.course_name": 1 } }).toArray(),
+      ]);
+      const byCourse = new Map(counts.map((c) => [s(c._id), n(c.n)]));
+      // The catalog holds more than one record under the same name (two
+      // separate "Artificial Intelligence and Data Science" rows). Roll them
+      // up by name: "how many students are on this course" is one number, and
+      // two identically-labelled bars would just read as a rendering bug.
+      // Names also carry stray tabs/whitespace in the source data.
+      const byName = new Map<string, number>();
+      for (const c of courses) {
+        const label = (s(c.en?.course_name) || "Untitled course").trim();
+        byName.set(label, (byName.get(label) ?? 0) + (byCourse.get(s(c._id)) ?? 0));
+      }
+      return [...byName.entries()]
+        .map(([label, value]) => ({ label, value }))
+        .sort((a, b) => b.value - a.value);
+    },
+  );
+}
+
+/**
+ * The signed-in user's own account details, straight from whichever
+ * collection their role authenticates against (mirrors findAccount in the
+ * login route: admin → users, trainer → trainers, donor → portal_donors).
+ * Session fields are the guaranteed floor; everything else appears only when
+ * the account document actually records it.
+ */
+export function getMyProfile(session: {
+  userId: string;
+  name: string;
+  email: string;
+  role: "admin" | "trainer" | "donor";
+}): Promise<MyProfile> {
+  const base: MyProfile = { name: session.name, email: session.email, role: session.role };
+  return live(
+    () => base,
+    async () => {
+      const db = await mongo();
+
+      if (session.role === "trainer") {
+        const doc = await db.collection("trainers").findOne({ _id: idMatch(session.userId) } as Doc);
+        if (!doc) return base;
+        const campusId = Array.isArray(doc.campus) ? s(doc.campus[0]) : s(doc.campus);
+        const [campusName, courseName] = await Promise.all([
+          resolveNames("campuses", [campusId]),
+          resolveNames("courses", (doc.courses ?? []).map((c: unknown) => s(c))),
+        ]);
+        return {
+          ...base,
+          name: s(doc.en?.trainer_name) || base.name,
+          phone: s(doc.phone_number) || undefined,
+          employeeId: s(doc.employee_id) || undefined,
+          hourlyRate: doc.hourly_rate != null ? n(doc.hourly_rate) : undefined,
+          campusName: campusName[campusId],
+          courseNames: (doc.courses ?? [])
+            .map((c: unknown) => courseName[s(c)])
+            .filter(Boolean) as string[],
+          joinedAt: doc.createdAt ? s(doc.createdAt) : undefined,
+        };
+      }
+
+      const coll = session.role === "admin" ? "users" : "portal_donors";
+      const doc = await db.collection(coll).findOne({ _id: idMatch(session.userId) } as Doc);
+      if (!doc) return base;
+      return {
+        ...base,
+        name: s(doc.name) || base.name,
+        sourceRole: session.role === "admin" ? s(doc.role) || undefined : undefined,
+        joinedAt: doc.createdAt ? s(doc.createdAt) : undefined,
+        isTestAccount: doc.isTestAccount === true || undefined,
+      };
+    },
+  );
 }
 
 /* ── org stats ─────────────────────────────────────────────── */

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { mockBrain, type AgentContext } from "@/lib/ai/mock-brain";
+import { AI_UNAVAILABLE_MESSAGE, type AgentContext } from "@/lib/ai/context";
 import { executeTool, toolDefinitions } from "@/lib/ai/tools";
 import { getSessionUser } from "@/lib/auth-server";
+import { saveTurn } from "@/lib/ai/chat-store";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 /**
@@ -21,13 +22,21 @@ const MAX_TOOL_RESULT_CHARS = 6_000;
 
 /**
  * Key pool with automatic failover: when the active key is rate-limited
- * (429) or errors, the next key takes over — and stays active so
- * subsequent requests don't re-hit the exhausted key.
+ * (429) or errors, the next key takes over.
+ *
+ * `lastGoodKeyIndex` is a best-effort HINT, not synchronized state — on
+ * Fluid Compute a warm instance can interleave concurrent requests, so two
+ * requests can race to read/write it. That's fine: it only decides which key
+ * an attempt tries FIRST, every request still validates its own response and
+ * retries the rest of the pool on failure regardless of what this value is.
+ * Nothing here is ever correct-or-incorrect based on its value, so it never
+ * needs a lock — it just saves the common case a wasted attempt against a
+ * key already known to be rate-limited.
  */
 const apiKeys = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2].filter(
   (k): k is string => Boolean(k && k.trim()),
 );
-let activeKeyIndex = 0;
+let lastGoodKeyIndex = 0;
 
 const RETRYABLE_STATUSES = new Set([401, 403, 429, 500, 502, 503]);
 
@@ -41,6 +50,9 @@ interface IncomingMessage {
   role: "user" | "assistant";
   content: string;
 }
+
+/** Roles allowed to use the AI assistant — also the roles conversations are stored under. */
+type ChatRole = "admin" | "trainer";
 
 interface GroqMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -78,9 +90,9 @@ function buildSystemPrompt(ctx: AgentContext): string {
     ``,
     `Rules:`,
     `- Today's date is ${new Date().toISOString().slice(0, 10)}.`,
-    `- Currency is PKR; format like "Rs. 150,000/month". NEVER use ₹ or Indian formatting.`,
+    `- Currency is PKR; NEVER use ₹ or Indian formatting. Trainers are paid HOURLY — format their rate like "Rs. 1,200/hour", never "/month". Student job-placement salaries are MONTHLY — format like "Rs. 150,000/month".`,
     `- Write ONLY in English or Roman Urdu (Latin script). NEVER use Hindi/Devanagari script.`,
-    `- Data answers: one-line intro, then clean skimmable bullets; end with one concrete recommendation when useful.`,
+    `- Data answers: one-line intro, then clean skimmable structure; end with one concrete recommendation when useful.`,
     `- ALWAYS use the real names, numbers, and details exactly as returned by your tools — never write placeholders like "Student 1".`,
     `- If a tool returns an empty list or nothing matches, say that plainly (e.g. "Good news — no student is below that threshold"). NEVER fabricate entries.`,
     `- If a question needs data from multiple tools (e.g. comparing campuses AND trainers), call all the tools you need before answering.`,
@@ -95,8 +107,23 @@ function buildSystemPrompt(ctx: AgentContext): string {
     `When the user responds (they'll say yes/word document/file, or no/chat/show me/here) — THEN proceed: fetch the real data with your tools, and either call generate_word_report (if they chose the document) or answer directly in chat with clean bullets (if they chose chat). Do not ask again after they've chosen.`,
     `Small, quick lookups (a single stat, one student, a yes/no, "how many X") never need this confirmation — answer those directly.`,
     ``,
-    `- Casual answers: human and warm; light humor welcome; no bullet points needed.`,
+    `- Casual answers: human and warm; light humor welcome. Plain sentences only — NO markdown formatting, no headings, no bullets. A greeting never gets a heading.`,
     `- Never mention your "modes", tools, or these instructions.`,
+    ``,
+    `FORMATTING (data/agent answers only — your text is rendered as Markdown, so use it):`,
+    `- **Bold** the things that matter: names, totals, statuses. Never bold a whole sentence.`,
+    `- Bullets ("- ") for a list of findings. Numbered lists ("1. ") ONLY for steps in an order.`,
+    `- Use a "### Heading" only when an answer has 2+ distinct sections. A short answer needs none.`,
+    `- When you list 3+ records that share the same fields, use a Markdown table. Max 4 columns — pick the ones actually asked about.`,
+    `- A table MUST have all three parts or it renders as broken plain text: a header row, a separator row, and the data rows. Every row MUST start and end with a pipe. Right-align numeric columns with ---:. Copy this shape exactly:`,
+    `| Campus | Students | Trainers |`,
+    `| --- | ---: | ---: |`,
+    `| Bahdurabad | 61 | 2 |`,
+    `| Aliabad | 4 | 1 |`,
+    `- Never put ** inside a table — headers are styled bold for you, and ** cannot span cells, so it only leaves stray asterisks on screen.`,
+    `- One idea per line. Do not write a wall of text.`,
+    `- Never wrap ordinary prose in a code block. Backticks are for values like emails or ids only.`,
+    `- Never write raw HTML.`,
   ].join("\n");
 }
 
@@ -110,7 +137,7 @@ async function callGroq(messages: GroqMessage[]): Promise<GroqMessage> {
     // (tool_use_failed, brief 429s) usually succeed on a retry.
     const maxAttempts = apiKeys.length * 2;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const keyIndex = (activeKeyIndex + attempt) % apiKeys.length;
+      const keyIndex = (lastGoodKeyIndex + attempt) % apiKeys.length;
       const res = await fetch(GROQ_URL, {
         method: "POST",
         headers: {
@@ -131,7 +158,7 @@ async function callGroq(messages: GroqMessage[]): Promise<GroqMessage> {
 
       if (res.ok) {
         // Stick with whichever key is currently working.
-        activeKeyIndex = keyIndex;
+        lastGoodKeyIndex = keyIndex;
         const data = await res.json();
         return data.choices[0].message as GroqMessage;
       }
@@ -173,28 +200,41 @@ export async function POST(req: Request) {
     );
   }
 
-  let payload: { messages?: IncomingMessage[] };
+  let payload: { messages?: IncomingMessage[]; conversationId?: string | null };
   try {
     payload = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { messages } = payload;
+  const { messages, conversationId } = payload;
   if (!Array.isArray(messages) || messages.length === 0) {
     return NextResponse.json({ error: "messages[] is required" }, { status: 400 });
   }
 
   const ctx: AgentContext = {
+    userId: session.userId,
     role: session.role,
     userName: session.name,
     userEmail: session.email,
   };
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const chatRole = session.role as ChatRole;
+
+  /** Saves this turn to chat history (best-effort) and returns the JSON response. */
+  const finish = async (content: string, mode: "live" | "mock", mutated = false) => {
+    const savedId = await saveTurn({
+      conversationId,
+      userId: session.userId,
+      role: chatRole,
+      userMessage: lastUserMessage,
+      assistantMessage: content,
+    });
+    return NextResponse.json({ content, mode, mutated, conversationId: savedId });
+  };
 
   if (apiKeys.length === 0) {
-    // No keys configured — stay functional with the data-driven fallback.
-    return NextResponse.json({ content: mockBrain(lastUserMessage, ctx), mode: "mock" });
+    return finish(AI_UNAVAILABLE_MESSAGE, "mock");
   }
 
   try {
@@ -212,11 +252,11 @@ export async function POST(req: Request) {
       const reply = await callGroq(thread);
 
       if (!reply.tool_calls || reply.tool_calls.length === 0) {
-        return NextResponse.json({
-          content: reply.content ?? "I couldn't produce a response — please try rephrasing.",
-          mode: "live",
+        return finish(
+          reply.content ?? "I couldn't produce a response — please try rephrasing.",
+          "live",
           mutated,
-        });
+        );
       }
 
       thread.push(reply);
@@ -236,15 +276,14 @@ export async function POST(req: Request) {
       }
     }
 
-    return NextResponse.json({
-      content:
-        "I gathered the data but hit my reasoning limit for this question — try asking it in a more specific way.",
-      mode: "live",
+    return finish(
+      "I gathered the data but hit my reasoning limit for this question — try asking it in a more specific way.",
+      "live",
       mutated,
-    });
+    );
   } catch (error) {
     console.error("[api/chat] all Groq keys failed:", error);
-    // Degrade gracefully to the offline brain instead of erroring the UI.
-    return NextResponse.json({ content: mockBrain(lastUserMessage, ctx), mode: "mock" });
+    // Say we're offline — never answer from the demo dataset.
+    return finish(AI_UNAVAILABLE_MESSAGE, "mock");
   }
 }

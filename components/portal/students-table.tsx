@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
 import type { Student } from "@/types/management";
 import { Avatar, Pill, TableShell, Td, Th } from "@/components/portal/ui";
 import {
@@ -18,7 +20,7 @@ export interface EnrichedStudent extends Student {
 }
 
 const selectClass =
-  "rounded-xl border border-edge bg-white px-3 py-2.5 text-sm font-medium text-ink focus:border-brand-500 focus:outline-none";
+  "rounded-xl border border-edge bg-surface px-3 py-2.5 text-sm font-medium text-ink focus:border-brand-500 focus:outline-none";
 
 /**
  * Server-driven table: filters/search/page live in the URL, the server
@@ -88,20 +90,21 @@ export function StudentsTable({
             <Th>Course</Th>
             <Th>Trainer</Th>
             <Th>Status</Th>
+            <Th />
           </tr>
         </thead>
         <tbody className={cn("divide-y divide-edge", isPending && "opacity-50")}>
           {students.map((s) => (
-            <tr key={s.id} className="hover:bg-surface-muted/60">
+            <tr key={s.id} className="group cursor-pointer hover:bg-surface-muted/60">
               <Td>
-                <div className="flex items-center gap-3">
+                <Link href={`/portal/admin/students/${s.id}`} className="flex items-center gap-3">
                   <Avatar name={s.name} />
                   <div>
-                    <p className="font-semibold text-ink">{s.name}</p>
+                    <p className="font-semibold text-ink group-hover:text-brand-700">{s.name}</p>
                     <p className="text-xs text-ink-muted">{s.email}</p>
                     <p className="text-xs text-ink-muted">{s.phone}</p>
                   </div>
-                </div>
+                </Link>
               </Td>
               <Td className="text-ink-muted">{s.campusName}</Td>
               <Td className="text-ink-muted">{s.courseName}</Td>
@@ -111,11 +114,20 @@ export function StudentsTable({
                   {s.enrollmentStatus === "active" ? "Active" : "Inactive"}
                 </Pill>
               </Td>
+              <Td>
+                <Link
+                  href={`/portal/admin/students/${s.id}`}
+                  aria-label={`View ${s.name}'s profile`}
+                  className="inline-flex text-ink-muted transition-colors group-hover:text-brand-700"
+                >
+                  <ChevronRight className="h-4 w-4" aria-hidden />
+                </Link>
+              </Td>
             </tr>
           ))}
           {students.length === 0 && (
             <tr>
-              <td colSpan={5} className="px-4 py-12 text-center text-ink-muted">
+              <td colSpan={6} className="px-4 py-12 text-center text-ink-muted">
                 No students match your filters.
               </td>
             </tr>

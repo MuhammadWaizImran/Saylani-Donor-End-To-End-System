@@ -6,12 +6,19 @@
 import { mongo } from "@/lib/mongodb";
 import type { SuccessStory } from "@/types/management";
 
+/** The collection holds test entries whose thumbnail is junk text (e.g.
+ *  "aabcd"); only a real URL is worth handing to next/image. */
+function asUrl(v: unknown): string {
+  const s = String(v ?? "");
+  return /^https?:\/\//.test(s) ? s : "";
+}
+
 function toSuccessStory(doc: Record<string, unknown>): SuccessStory {
   return {
     id: String(doc._id),
     name: String(doc.name ?? "—"),
     designation: String(doc.designation ?? ""),
-    photo: String(doc.thumbnail ?? ""),
+    photo: asUrl(doc.thumbnail),
     story: String(doc.story ?? ""),
     description: doc.description ? String(doc.description) : undefined,
     video: doc.video ? String(doc.video) : undefined,

@@ -77,10 +77,10 @@ export default function TrainerDashboardPage() {
       <div className="mb-8 flex flex-wrap items-center gap-4">
         <Avatar name={trainer.name} className="h-14 w-14 text-base" />
         <div>
-          <h1 className="font-display text-3xl tracking-tight text-black sm:text-4xl">
+          <h1 className="font-display text-3xl tracking-tight text-ink-strong sm:text-4xl">
             {trainer.name}
           </h1>
-          <p className="mt-1 text-sm text-[#6F6F6F]">
+          <p className="mt-1 text-sm text-ink-muted">
             {trainer.specialization} · {campusName} · Joined {trainer.joinedAt}
           </p>
         </div>
@@ -93,14 +93,14 @@ export default function TrainerDashboardPage() {
       </div>
 
       <section aria-labelledby="trainer-courses-heading" className="mt-10">
-        <h2 id="trainer-courses-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="trainer-courses-heading" className="mb-4 font-display text-xl text-ink-strong">
           Courses you&apos;re teaching
         </h2>
         <div className="grid gap-5 md:grid-cols-2">
           {courses.map((c) => (
-            <article key={c.id} className="portal-glow rounded-2xl border border-edge bg-white p-5">
+            <article key={c.id} className="portal-glow rounded-2xl border border-edge bg-surface p-5">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="font-display text-lg text-black">{c.name}</h3>
+                <h3 className="font-display text-lg text-ink-strong">{c.name}</h3>
                 <Pill tone={c.status === "running" ? "green" : c.status === "completed" ? "dark" : "gray"}>
                   {c.status}
                 </Pill>
@@ -115,7 +115,7 @@ export default function TrainerDashboardPage() {
       </section>
 
       <section aria-labelledby="trainer-students-heading" className="mt-10">
-        <h2 id="trainer-students-heading" className="mb-4 font-display text-xl text-black">
+        <h2 id="trainer-students-heading" className="mb-4 font-display text-xl text-ink-strong">
           Your students <span className="font-sans text-sm text-ink-muted">({activeStudents.length} active)</span>
         </h2>
         <TableShell minWidth={640}>

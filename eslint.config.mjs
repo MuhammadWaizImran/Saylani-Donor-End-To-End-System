@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Stray downloaded bundle in the project root — not part of the app.
+    "support*.js",
   ]),
 ]);
 

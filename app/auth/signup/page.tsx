@@ -54,10 +54,10 @@ export default function SignupPage() {
         <p className="mb-3 text-center text-xs font-semibold uppercase tracking-[0.2em] text-accent-600">
           Saylani portal
         </p>
-        <h1 className="text-center font-display text-4xl tracking-tight text-black sm:text-5xl">
-          Create your <em className="text-[#6F6F6F]">donor account</em>
+        <h1 className="text-center font-display text-4xl tracking-tight text-ink-strong sm:text-5xl">
+          Create your <em className="text-ink-muted">donor account</em>
         </h1>
-        <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-sm text-[#6F6F6F]">
+        <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-sm text-ink-muted">
           <HandCoins className="h-4 w-4 text-brand-600" aria-hidden />
           Track the impact of your giving across every campus.
         </p>
@@ -74,7 +74,7 @@ export default function SignupPage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Ahmed Raza"
-              className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+              className="mt-2 w-full rounded-xl border-2 border-edge bg-surface px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
             />
           </div>
           <div>
@@ -88,7 +88,7 @@ export default function SignupPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
-              className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+              className="mt-2 w-full rounded-xl border-2 border-edge bg-surface px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -103,7 +103,7 @@ export default function SignupPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Min 6 characters"
-                className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+                className="mt-2 w-full rounded-xl border-2 border-edge bg-surface px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
               />
             </div>
             <div>
@@ -117,13 +117,13 @@ export default function SignupPage() {
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 placeholder="Repeat password"
-                className="mt-2 w-full rounded-xl border-2 border-edge bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
+                className="mt-2 w-full rounded-xl border-2 border-edge bg-surface px-4 py-3 text-sm text-ink placeholder:text-ink-muted focus:border-brand-500 focus:outline-none"
               />
             </div>
           </div>
 
           {error && (
-            <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+            <p role="alert" className="rounded-xl bg-red-50 dark:bg-red-950/40 px-4 py-3 text-sm font-medium text-red-700 dark:text-red-300">
               {error}
             </p>
           )}
@@ -131,14 +131,14 @@ export default function SignupPage() {
           <button
             type="submit"
             disabled={busy}
-            className="flex w-full items-center justify-center gap-2 rounded-full bg-brand-700 px-6 py-3.5 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-60"
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-brand-solid px-6 py-3.5 text-sm font-semibold text-white transition-transform enabled:hover:scale-[1.02] disabled:opacity-60"
           >
             <UserPlus className="h-4 w-4 text-accent-400" aria-hidden />
             {busy ? "Creating account…" : "Create donor account"}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-[#6F6F6F]">
+        <p className="mt-6 text-center text-sm text-ink-muted">
           Already registered?{" "}
           <Link href="/auth/login" className="font-semibold text-brand-700 hover:underline">
             Log in

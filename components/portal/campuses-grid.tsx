@@ -1,8 +1,9 @@
 "use client";
 
-import { Building2, GraduationCap, School, Users } from "lucide-react";
+import Link from "next/link";
+import Image from "next/image";
+import { ArrowRight, Building2, GraduationCap, School, Users } from "lucide-react";
 import type { Campus } from "@/types/management";
-import { MiniProgress } from "@/components/portal/ui";
 import {
   PaginationBar,
   ResultsCount,
@@ -42,52 +43,59 @@ export function CampusesGrid({
 
       <div className={cn("grid gap-5 md:grid-cols-2 xl:grid-cols-3", isPending && "opacity-50")}>
         {campuses.map((campus) => (
-          <article key={campus.id} className="portal-glow flex flex-col rounded-2xl border border-edge bg-white p-6">
-            <div className="flex items-start justify-between gap-3">
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
-                <Building2 className="h-5 w-5" aria-hidden />
-              </span>
-              <span className="rounded-full bg-surface-muted px-2.5 py-1 text-xs font-semibold text-ink-muted">
-                Since {campus.established}
+          <Link
+            key={campus.id}
+            href={`/portal/admin/campuses/${campus.id}`}
+            className="portal-glow group flex flex-col overflow-hidden rounded-2xl border border-edge bg-surface transition-all hover:-translate-y-0.5"
+          >
+            <div className="relative h-32 w-full shrink-0 overflow-hidden bg-gradient-to-br from-brand-solid via-brand-500 to-accent-500">
+              {campus.image ? (
+                <Image src={campus.image} alt={campus.name} fill className="object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center">
+                  <Building2 className="h-9 w-9 text-white/40" aria-hidden />
+                </div>
+              )}
+            </div>
+            <div className="flex flex-1 flex-col p-6">
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="font-display text-2xl text-ink-strong">{campus.name}</h2>
+                <span className="mt-1 shrink-0 rounded-full bg-surface-muted px-2.5 py-1 text-xs font-semibold text-ink-muted">
+                  Since {campus.established || "—"}
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-ink-muted">
+                {campus.address ? `${campus.address}, ` : ""}
+                {campus.city}
+              </p>
+
+              <dl className="mt-5 grid grid-cols-3 gap-3 border-t border-edge pt-5 text-center">
+                <div>
+                  <dt className="sr-only">Students</dt>
+                  <GraduationCap className="mx-auto h-4 w-4 text-accent-600" aria-hidden />
+                  <dd className="mt-1 text-sm font-bold text-ink">{campus.studentCount.toLocaleString()}</dd>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Students</p>
+                </div>
+                <div>
+                  <dt className="sr-only">Trainers</dt>
+                  <Users className="mx-auto h-4 w-4 text-accent-600" aria-hidden />
+                  <dd className="mt-1 text-sm font-bold text-ink">{campus.trainerCount}</dd>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Trainers</p>
+                </div>
+                <div>
+                  <dt className="sr-only">Courses</dt>
+                  <School className="mx-auto h-4 w-4 text-accent-600" aria-hidden />
+                  <dd className="mt-1 text-sm font-bold text-ink">{campus.courseCount}</dd>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Courses</p>
+                </div>
+              </dl>
+
+              <span className="mt-5 flex items-center gap-1.5 border-t border-edge pt-4 text-xs font-semibold text-brand-700">
+                View campus details
+                <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
               </span>
             </div>
-            <h2 className="mt-4 font-display text-2xl text-black">{campus.name}</h2>
-            <p className="mt-1 text-sm text-ink-muted">
-              {campus.address}, {campus.city}
-            </p>
-
-            <dl className="mt-5 grid grid-cols-3 gap-3 border-t border-edge pt-5 text-center">
-              <div>
-                <dt className="sr-only">Students</dt>
-                <GraduationCap className="mx-auto h-4 w-4 text-accent-600" aria-hidden />
-                <dd className="mt-1 text-sm font-bold text-ink">{campus.studentCount.toLocaleString()}</dd>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Students</p>
-              </div>
-              <div>
-                <dt className="sr-only">Trainers</dt>
-                <Users className="mx-auto h-4 w-4 text-accent-600" aria-hidden />
-                <dd className="mt-1 text-sm font-bold text-ink">{campus.trainerCount}</dd>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Trainers</p>
-              </div>
-              <div>
-                <dt className="sr-only">Courses</dt>
-                <School className="mx-auto h-4 w-4 text-accent-600" aria-hidden />
-                <dd className="mt-1 text-sm font-bold text-ink">{campus.courseCount}</dd>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Courses</p>
-              </div>
-            </dl>
-
-            <div className="mt-5 flex items-center justify-between gap-3 border-t border-edge pt-4">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Overall progress</p>
-                <MiniProgress percent={campus.progressPercent} className="mt-1" />
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">Placement rate</p>
-                <p className="font-display text-2xl text-accent-700">{campus.placementRate}%</p>
-              </div>
-            </div>
-          </article>
+          </Link>
         ))}
         {campuses.length === 0 && (
           <p className="col-span-full py-12 text-center text-ink-muted">No campuses match your search.</p>

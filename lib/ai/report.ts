@@ -30,6 +30,7 @@ const slugify = (text: string) =>
 export async function uploadWordReport(
   buffer: Buffer,
   title: string,
+  ownerId: string,
 ): Promise<{ url: string; filename: string }> {
   const filename = `${slugify(title)}-${Date.now()}.docx`;
   const db = await mongo();
@@ -37,7 +38,17 @@ export async function uploadWordReport(
 
   const id = await new Promise<string>((resolve, reject) => {
     const stream = bucket.openUploadStream(filename, {
-      metadata: { contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+      metadata: {
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        // The only person allowed to download this report — enforced in
+        // /api/reports/[id]. GridFS ids are guessable, so without this any
+        // signed-in admin/trainer could pull anyone else's export.
+        ownerId,
+        // Report files are transient; the TTL index on reports.files
+        // (scripts/ensure-indexes.ts) deletes them ~24h after upload, which
+        // is what makes the "link expires" promise actually true.
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
     });
     stream.on("error", reject);
     stream.on("finish", () => resolve(String(stream.id)));

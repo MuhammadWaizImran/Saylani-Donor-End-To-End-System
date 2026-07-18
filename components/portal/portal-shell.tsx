@@ -23,7 +23,8 @@ import {
 } from "lucide-react";
 import type { Session, UserRole } from "@/types/management";
 import { logout, useSession } from "@/lib/auth";
-import { Logo } from "@/components/ui/logo";
+import { SaylaniIcon, SaylaniLogo } from "@/components/ui/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Avatar } from "@/components/portal/ui";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +62,8 @@ const roleHome: Record<UserRole, string> = {
   trainer: "/portal/trainer",
 };
 
-/** Which role a path section belongs to; used for role-based access control. */
+/** Which role a path section belongs to; used for role-based access control.
+ *  null = shared portal page (e.g. /portal/profile), open to every role. */
 function requiredRole(pathname: string): UserRole | null {
   if (pathname.startsWith("/portal/admin")) return "admin";
   if (pathname.startsWith("/portal/donor")) return "donor";
@@ -87,7 +89,12 @@ export function PortalShell({ children }: { children: React.ReactNode }) {
     }
   }, [session, pathname, router]);
 
-  if (!session || requiredRole(pathname) !== session.role) {
+  const needed = requiredRole(pathname);
+  // /portal itself always redirects (effect above); role-owned sections wait
+  // until the session matches. Shared pages (needed === null) render for any
+  // signed-in role — without that carve-out, /portal/profile would sit on
+  // this spinner forever.
+  if (!session || pathname === "/portal" || (needed !== null && needed !== session.role)) {
     return (
       <div className="flex min-h-[60svh] items-center justify-center">
         <p className="animate-pulse text-sm text-ink-muted">Loading your dashboard…</p>
@@ -115,11 +122,23 @@ function PortalChrome({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const nav = navByRole[session.role];
   // The AI assistant fills the whole viewport instead of sitting in a
   // padded, card-bounded page — everything else keeps the normal page layout.
   const isFullBleed = pathname.endsWith("/assistant");
+  // Starts collapsed when the first page IS the assistant (deep link /
+  // refresh) — the transition adjustment below only covers in-app navigation.
+  const [sidebarOpen, setSidebarOpen] = useState(!isFullBleed);
+
+  // Give the AI Assistant the full width automatically — the user shouldn't
+  // have to collapse the sidebar by hand every time they open it. Adjusting
+  // state during render (not in an effect) on the isFullBleed transition, per
+  // React's "adjusting state when a prop changes" pattern.
+  const [wasFullBleed, setWasFullBleed] = useState(isFullBleed);
+  if (isFullBleed !== wasFullBleed) {
+    setWasFullBleed(isFullBleed);
+    if (isFullBleed) setSidebarOpen(false);
+  }
 
   const onLogout = async () => {
     await logout();
@@ -140,8 +159,8 @@ function PortalChrome({
             className={cn(
               "group relative flex items-center gap-3 overflow-hidden rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200",
               active
-                ? "bg-white text-brand-800 shadow-[0_0_0_1px_rgba(11,115,183,0.14),0_6px_16px_-4px_rgba(11,115,183,0.4)]"
-                : "text-brand-900/70 hover:translate-x-0.5 hover:bg-white/60 hover:text-brand-900",
+                ? "bg-surface text-brand-800 shadow-[0_0_0_1px_rgba(11,115,183,0.14),0_6px_16px_-4px_rgba(11,115,183,0.4)]"
+                : "text-brand-900/70 hover:translate-x-0.5 hover:bg-surface/60 hover:text-brand-900",
             )}
           >
             {active && (
@@ -154,8 +173,8 @@ function PortalChrome({
               className={cn(
                 "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-all duration-200",
                 active
-                  ? "bg-white text-brand-700 shadow-sm"
-                  : "text-current group-hover:bg-white group-hover:text-brand-600 group-hover:shadow-sm",
+                  ? "bg-surface text-brand-700 shadow-sm"
+                  : "text-current group-hover:bg-surface group-hover:text-brand-600 group-hover:shadow-sm",
               )}
             >
               <Icon className="h-4 w-4" aria-hidden />
@@ -168,30 +187,39 @@ function PortalChrome({
   );
 
   return (
-    <div className={cn("mx-auto flex min-h-svh w-full", isFullBleed ? "max-w-none" : "max-w-[1400px]")}>
+    <div className="mx-auto flex min-h-svh w-full">
       {/* Desktop sidebar — expanded */}
       {sidebarOpen ? (
         <aside className="sticky top-0 hidden h-svh w-64 shrink-0 flex-col bg-gradient-to-br from-brand-100 via-brand-50 to-accent-100 px-4 py-6 shadow-[14px_0_36px_-22px_rgba(11,115,183,0.55)] lg:flex">
-          <div className="mb-4 flex items-center justify-between px-1">
+          <div className="mb-4 space-y-3">
+            <div className="flex items-start justify-between gap-2 px-1">
+              <Link
+                href={roleHome[session.role]}
+                aria-label="Saylani Welfare — go to dashboard"
+                className="rounded-lg px-1.5 py-1 transition-opacity hover:opacity-80"
+              >
+                <SaylaniLogo width={148} />
+              </Link>
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Close sidebar"
+                title="Close sidebar"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-edge text-ink-muted transition-colors hover:border-brand-400 hover:text-brand-700"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            </div>
             <p className="px-2.5 text-xs font-semibold uppercase tracking-[0.18em] text-accent-600">
               {session.role} portal
             </p>
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(false)}
-              aria-label="Close sidebar"
-              title="Close sidebar"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-edge text-ink-muted transition-colors hover:border-brand-400 hover:text-brand-700"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden />
-            </button>
           </div>
           {navLinks}
           <div className="mt-auto space-y-1 border-t border-edge pt-4">
             <button
               type="button"
               onClick={onLogout}
-              className="flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-[#6F6F6F] hover:bg-red-50 hover:text-red-700"
+              className="flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-ink-muted hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-400"
             >
               <LogOut className="h-4 w-4" aria-hidden />
               Log out
@@ -201,6 +229,15 @@ function PortalChrome({
       ) : (
         /* Desktop sidebar — collapsed icon strip */
         <aside className="sticky top-0 hidden h-svh w-14 shrink-0 flex-col items-center bg-gradient-to-br from-brand-100 to-accent-100 py-4 shadow-[14px_0_36px_-22px_rgba(11,115,183,0.55)] lg:flex">
+          {/* The strip is too narrow for the wordmark, so the emblem stands in
+              for it while the sidebar is collapsed. */}
+          <Link
+            href={roleHome[session.role]}
+            aria-label="Saylani Welfare — go to dashboard"
+            className="mb-3 transition-opacity hover:opacity-80"
+          >
+            <SaylaniIcon size={34} />
+          </Link>
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
@@ -224,8 +261,8 @@ function PortalChrome({
                   className={cn(
                     "inline-flex h-9 w-9 items-center justify-center rounded-xl transition-all duration-200",
                     active
-                      ? "bg-gradient-to-br from-brand-600 to-accent-500 text-white shadow-[0_0_14px_2px_rgba(109,168,0,0.45)]"
-                      : "text-[#6F6F6F] hover:scale-105 hover:bg-surface-muted hover:text-black",
+                      ? "bg-gradient-to-br from-brand-solid to-accent-500 text-white shadow-[0_0_14px_2px_rgba(109,168,0,0.45)]"
+                      : "text-ink-muted hover:scale-105 hover:bg-surface-muted hover:text-ink-strong",
                   )}
                 >
                   <Icon className="h-4 w-4" aria-hidden />
@@ -239,7 +276,7 @@ function PortalChrome({
               onClick={onLogout}
               aria-label="Log out"
               title="Log out"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-[#6F6F6F] hover:bg-red-50 hover:text-red-700"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-ink-muted hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-400"
             >
               <LogOut className="h-4 w-4" aria-hidden />
             </button>
@@ -249,7 +286,7 @@ function PortalChrome({
 
       <div className="flex min-h-svh min-w-0 flex-1 flex-col bg-gradient-to-r from-brand-100/40 via-transparent via-30% to-transparent">
         {/* Portal topbar */}
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-brand-100 bg-gradient-to-r from-brand-50 via-white to-accent-50 px-5 py-3.5">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-brand-100 bg-gradient-to-r from-brand-50 via-surface to-accent-50 px-6 py-4">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -260,18 +297,27 @@ function PortalChrome({
             >
               {menuOpen ? <X className="h-4 w-4" aria-hidden /> : <Menu className="h-4 w-4" aria-hidden />}
             </button>
+            {/* Mobile has no sidebar header, so the topbar carries the mark. */}
             <div className="lg:hidden">
-              <Logo size={30} withWordmark={false} />
+              <SaylaniLogo width={104} />
             </div>
-            <p className="hidden text-sm text-[#6F6F6F] sm:block">
-              Signed in as <span className="font-semibold text-black">{session.name}</span>
+            <p className="hidden text-sm text-ink-muted sm:block">
+              Signed in as <span className="font-semibold text-ink-strong">{session.name}</span>
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="rounded-full bg-accent-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-accent-800">
+          <div className="flex items-center gap-2.5">
+            <ThemeToggle />
+            <span className="rounded-full bg-accent-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wider text-accent-800">
               {session.role}
             </span>
-            <Avatar name={session.name} />
+            <Link
+              href="/portal/profile"
+              aria-label="My profile"
+              title="My profile"
+              className="rounded-full ring-brand-400 ring-offset-2 ring-offset-surface transition-shadow hover:ring-2"
+            >
+              <Avatar name={session.name} />
+            </Link>
           </div>
         </div>
 
@@ -283,7 +329,7 @@ function PortalChrome({
               <button
                 type="button"
                 onClick={onLogout}
-                className="w-full rounded-xl px-3.5 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-50"
+                className="w-full rounded-xl px-3.5 py-2.5 text-sm font-semibold text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40"
               >
                 Log out
               </button>
