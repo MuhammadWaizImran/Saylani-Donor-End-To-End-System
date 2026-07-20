@@ -45,6 +45,43 @@ export const toolDefinitions = [
   {
     type: "function" as const,
     function: {
+      name: "analyze_enrolments",
+      description:
+        "THE tool for counting/grouping enrolments — use it for any 'how many X by Y' question about students. Groups the student_inductions records (one row per student enrolment) by up to two dimensions, with optional filters. Answers questions like: dropouts per course per month, enrolments per campus, passed students per course, status breakdown per trainer. Returns real counts with resolved names — never estimate these yourself.",
+      parameters: {
+        type: "object",
+        properties: {
+          group_by: {
+            type: "string",
+            enum: ["status", "month", "course", "campus", "trainer"],
+            description: "Primary grouping dimension.",
+          },
+          then_by: {
+            type: "string",
+            enum: ["status", "month", "course", "campus", "trainer"],
+            description: "Optional second dimension, e.g. group_by='course' + then_by='month'.",
+          },
+          status: {
+            type: "string",
+            description:
+              "Filter to one enrolment status. Real values: enrolled, pending, passed, completed, dropout, rejected, blacklisted.",
+          },
+          course: { type: "string", description: "Filter to one course — name or id." },
+          campus: { type: "string", description: "Filter to one campus — name or id." },
+          date_field: {
+            type: "string",
+            enum: ["dropout_date", "enrollment_date", "createdAt"],
+            description:
+              "Which date drives month grouping. Use dropout_date when the question is about dropouts, enrollment_date for when students joined, createdAt (default) for when the record was made.",
+          },
+        },
+        required: ["group_by"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "list_campuses",
       description:
         "All Saylani campuses with city and their student, trainer, and course counts.",
@@ -439,6 +476,105 @@ export async function executeTool(
         total_trainers: st.totalTrainers,
         running_courses: st.runningCourses,
         active_classes: st.activeClasses,
+      });
+    }
+
+    case "analyze_enrolments": {
+      /* Groups student_inductions — the hub collection, one row per student
+       * enrolment. Every "how many students by X" question resolves here, so
+       * the model never has to guess a count it can't otherwise fetch.
+       *
+       * Dates in this collection are inconsistent: createdAt is a real Date,
+       * while dropout_date / enrollment_date are ISO strings on some records.
+       * $convert with onError/onNull keeps a bad or missing value out of the
+       * result instead of failing the whole aggregation. */
+      const DIM_FIELD: Record<string, string> = {
+        status: "$status",
+        course: "$course",
+        campus: "$campus",
+        trainer: "$trainer",
+      };
+      const dateField = ["dropout_date", "enrollment_date", "createdAt"].includes(
+        argStr(args, "date_field"),
+      )
+        ? argStr(args, "date_field")
+        : "createdAt";
+      const monthExpr = {
+        $dateToString: {
+          format: "%Y-%m",
+          date: { $convert: { input: `$${dateField}`, to: "date", onError: null, onNull: null } },
+        },
+      };
+      const dimExpr = (d: string) => (d === "month" ? monthExpr : DIM_FIELD[d]);
+
+      const groupBy = argStr(args, "group_by");
+      const thenBy = argStr(args, "then_by");
+      if (!DIM_FIELD[groupBy] && groupBy !== "month") {
+        return err(`group_by must be one of: status, month, course, campus, trainer.`);
+      }
+
+      // Filters
+      const match: Record<string, unknown> = {};
+      const statusFilter = argStr(args, "status");
+      if (statusFilter) match.status = statusFilter.toLowerCase();
+      if (argStr(args, "course")) {
+        const c = matchByName(await getCourses(), argStr(args, "course"));
+        if (!c) return err(`Course not found: "${argStr(args, "course")}". Use list_courses to see options.`);
+        // student_inductions.course points at the catalog course; new_course
+        // points at the specific offering. Match either so a course filter
+        // works whichever id the caller resolved.
+        match.$or = [{ course: idEq(c.id) }, { new_course: idEq(c.id) }];
+      }
+      if (argStr(args, "campus")) {
+        const cam = matchByName(await getCampuses(), argStr(args, "campus"));
+        if (!cam) return err(`Campus not found: "${argStr(args, "campus")}". Use list_campuses to see options.`);
+        match.campus = idEq(cam.id);
+      }
+
+      const groupId: Record<string, unknown> = { a: dimExpr(groupBy) };
+      if (thenBy && (DIM_FIELD[thenBy] || thenBy === "month")) groupId.b = dimExpr(thenBy);
+
+      const rows = await db
+        .collection("student_inductions")
+        .aggregate([
+          ...(Object.keys(match).length ? [{ $match: match }] : []),
+          { $group: { _id: groupId, count: { $sum: 1 } } },
+          { $sort: { count: -1 } },
+          { $limit: 100 },
+        ])
+        .toArray();
+
+      // Resolve ids → names so the model reports "HACK", not "652c0e40…".
+      const needName = (d: string) => d === "course" || d === "campus" || d === "trainer";
+      const table = needName(groupBy) ? (groupBy === "course" ? "courses" : groupBy === "campus" ? "campuses" : "trainers") : null;
+      const table2 = thenBy && needName(thenBy) ? (thenBy === "course" ? "courses" : thenBy === "campus" ? "campuses" : "trainers") : null;
+      const [names1, names2] = await Promise.all([
+        table ? resolveNames(table, rows.map((r) => String(r._id.a ?? ""))) : Promise.resolve({}),
+        table2 ? resolveNames(table2, rows.map((r) => String(r._id.b ?? ""))) : Promise.resolve({}),
+      ]);
+      const label = (d: string, v: unknown, map: Record<string, string>) => {
+        const raw = String(v ?? "");
+        if (!raw || raw === "null") return d === "month" ? "(no date recorded)" : "(not set)";
+        // Some course names carry stray tabs/whitespace in the source data.
+        return (needName(d) ? (map[raw] ?? raw) : raw).trim();
+      };
+
+      const out = rows.map((r) => ({
+        [groupBy]: label(groupBy, r._id.a, names1),
+        ...(groupId.b !== undefined ? { [thenBy]: label(thenBy, r._id.b, names2) } : {}),
+        count: Number(r.count ?? 0),
+      }));
+
+      return JSON.stringify({
+        grouped_by: thenBy ? `${groupBy} + ${thenBy}` : groupBy,
+        ...(groupBy === "month" || thenBy === "month" ? { month_based_on: dateField } : {}),
+        filters: {
+          status: statusFilter || null,
+          course: argStr(args, "course") || null,
+          campus: argStr(args, "campus") || null,
+        },
+        total_matching_enrolments: out.reduce((sum, r) => sum + r.count, 0),
+        rows: out,
       });
     }
 

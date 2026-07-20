@@ -149,9 +149,13 @@ async function main() {
       `got ${res.status}`,
     );
     check("chat used live AI (not mock fallback)", chat?.mode === "live", `mode=${chat?.mode}`);
+    // Compare against the LIVE count fetched above, never a hardcoded number —
+    // this assertion previously pinned "7" and started failing the moment a
+    // campus was added, blaming the agent for being right.
+    const liveCampusCount: number = records?.campuses?.length ?? 0;
     check(
-      "answer states real campus count (7 from MongoDB)",
-      /\b(7|seven)\b/i.test(chat?.content ?? ""),
+      `answer states real campus count (${liveCampusCount} from MongoDB)`,
+      new RegExp(`\\b${liveCampusCount}\\b`).test(chat?.content ?? ""),
       chat?.content?.slice(0, 80),
     );
 
