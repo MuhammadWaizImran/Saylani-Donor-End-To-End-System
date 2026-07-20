@@ -7,6 +7,7 @@ import {
   CHART_GRID as GRID,
   CHART_SURFACE as SURFACE,
   SERIES_1,
+  SERIES_2,
 } from "@/lib/chart-palette";
 import { cn, formatCompact, formatCurrency } from "@/lib/utils";
 
@@ -52,6 +53,22 @@ function barPath(x: number, y: number, w: number, h: number, round: boolean) {
   if (!round) return `M${x},${y} h${w} v${h} h${-w} Z`;
   const r = Math.min(RADIUS, h, w / 2);
   return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
+}
+
+/** Rough glyph width for this app's 11px sans body text — used only to
+ *  decide how many characters of an axis label fit in a given band, never
+ *  for exact layout. */
+const CHAR_PX = 6.3;
+
+/** Shortens a label to whatever fits `widthPx` at ~11px, appending "…". The
+ *  full name is unaffected everywhere else (tooltip, table, aria-label) —
+ *  this only protects the axis tick itself from overlapping its neighbours,
+ *  which a caller-side fixed-length truncation can't guarantee once the
+ *  chart ends up in a narrower column than it was tuned for. */
+function truncateToWidth(label: string, widthPx: number): string {
+  const maxChars = Math.max(1, Math.floor(widthPx / CHAR_PX));
+  if (label.length <= maxChars) return label;
+  return `${label.slice(0, Math.max(1, maxChars - 1))}…`;
 }
 
 /** Measures the container so the chart can size itself to the card. */
@@ -235,7 +252,14 @@ export function ColumnChart({
   const PLOT_H = 210;
   const H = PAD_T + PLOT_H + PAD_B;
 
-  const minW = PAD_L + PAD_R + data.length * 34;
+  // The per-item width budget grows with how long the labels actually are
+  // (month ticks like "Jan 25" need far less room than a course name) —
+  // capped so one very long label can't blow the chart out, since the axis
+  // tick itself is truncated to fit below regardless.
+  const maxLabelLen = Math.max(...data.map((d) => d.label.length), 1);
+  const perItemPx = Math.max(34, Math.min(90, maxLabelLen * CHAR_PX + 10));
+
+  const minW = PAD_L + PAD_R + data.length * perItemPx;
   const W = Math.max(minW, width || minW);
   const plotW = W - PAD_L - PAD_R;
   const band = data.length > 0 ? plotW / data.length : plotW;
@@ -246,8 +270,7 @@ export function ColumnChart({
   const maxTick = ticks[ticks.length - 1] || 1;
   const yOf = (v: number) => PAD_T + PLOT_H - (v / maxTick) * PLOT_H;
 
-  // Keep ~34px per label so they never collide.
-  const stride = Math.max(1, Math.ceil((data.length * 34) / Math.max(plotW, 1)));
+  const stride = Math.max(1, Math.ceil((data.length * perItemPx) / Math.max(plotW, 1)));
 
   return (
     <div ref={ref} className="relative">
@@ -296,10 +319,12 @@ export function ColumnChart({
                     />
                   );
                 })}
-                {/* x label */}
+                {/* x label — truncated to whatever actually fits this band,
+                    so a narrow column can never make neighbouring labels
+                    overlap; the full name is still on hover and in the table. */}
                 {i % stride === 0 && (
                   <text x={cx} y={H - 12} textAnchor="middle" fontSize={11} fill={AXIS_INK}>
-                    {d.label}
+                    {truncateToWidth(d.label, band)}
                   </text>
                 )}
                 {/* hit area — wider than the mark */}
@@ -486,6 +511,136 @@ export function TrendArea({
           x={(xOf(hover) / W) * 100}
           title={data[hover].fullLabel}
           rows={[{ label: "Count", value: formatValue(data[hover].value), color }]}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ── two-series trend (area + line) ────────────────────────── */
+
+/**
+ * Two lines sharing one time axis — a primary series with an area wash (the
+ * "main" quantity, e.g. enrolments) and a secondary line over it (e.g.
+ * dropouts). Both share the same y-scale so their relative size is honest.
+ */
+export function MultiTrendArea({
+  data,
+  primaryLabel,
+  secondaryLabel,
+  primaryColor = SERIES_1,
+  secondaryColor = SERIES_2,
+  format = "number",
+}: {
+  data: Array<{ label: string; fullLabel: string; primary: number; secondary: number }>;
+  primaryLabel: string;
+  secondaryLabel: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+  format?: ValueFormat;
+}) {
+  const formatValue = (v: number) => fmt(v, format);
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+
+  const PAD_L = 48;
+  const PAD_R = 14;
+  const PAD_T = 8;
+  const PAD_B = 34;
+  const PLOT_H = 210;
+  const H = PAD_T + PLOT_H + PAD_B;
+
+  const minW = PAD_L + PAD_R + data.length * 30;
+  const W = Math.max(minW, width || minW);
+  const plotW = W - PAD_L - PAD_R;
+
+  const maxVal = Math.max(...data.map((d) => Math.max(d.primary, d.secondary)), 0);
+  const ticks = niceTicks(maxVal);
+  const maxTick = ticks[ticks.length - 1] || 1;
+  const xOf = (i: number) => (data.length === 1 ? PAD_L + plotW / 2 : PAD_L + (i / (data.length - 1)) * plotW);
+  const yOf = (v: number) => PAD_T + PLOT_H - (v / maxTick) * PLOT_H;
+
+  const lineOf = (key: "primary" | "secondary") =>
+    data.map((d, i) => `${i === 0 ? "M" : "L"}${xOf(i)},${yOf(d[key])}`).join(" ");
+  const primaryLine = lineOf("primary");
+  const secondaryLine = lineOf("secondary");
+  const primaryArea = data.length
+    ? `${primaryLine} L${xOf(data.length - 1)},${PAD_T + PLOT_H} L${xOf(0)},${PAD_T + PLOT_H} Z`
+    : "";
+  const stride = Math.max(1, Math.ceil((data.length * 38) / Math.max(plotW, 1)));
+
+  return (
+    <div ref={ref} className="relative">
+      <div className="overflow-x-auto">
+        <svg width={W} height={H} role="img" aria-label={`Trend: ${primaryLabel} vs ${secondaryLabel}`}>
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={PAD_L} x2={W - PAD_R} y1={yOf(t)} y2={yOf(t)} stroke={GRID} strokeWidth={1} />
+              <text
+                x={PAD_L - 8}
+                y={yOf(t) + 4}
+                textAnchor="end"
+                fontSize={11}
+                fill={AXIS_INK}
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {formatValue(t)}
+              </text>
+            </g>
+          ))}
+
+          <path d={primaryArea} fill={primaryColor} opacity={0.1} />
+          <path d={primaryLine} fill="none" stroke={primaryColor} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          <path d={secondaryLine} fill="none" stroke={secondaryColor} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+          {hover !== null && (
+            <line x1={xOf(hover)} x2={xOf(hover)} y1={PAD_T} y2={PAD_T + PLOT_H} stroke={GRID} strokeWidth={1} />
+          )}
+
+          {hover !== null && (
+            <>
+              <circle cx={xOf(hover)} cy={yOf(data[hover].primary)} r={4} fill={primaryColor} stroke={SURFACE} strokeWidth={2} />
+              <circle cx={xOf(hover)} cy={yOf(data[hover].secondary)} r={4} fill={secondaryColor} stroke={SURFACE} strokeWidth={2} />
+            </>
+          )}
+
+          {data.map((d, i) => (
+            <g key={d.label}>
+              {i % stride === 0 && (
+                <text x={xOf(i)} y={H - 12} textAnchor="middle" fontSize={11} fill={AXIS_INK}>
+                  {d.label}
+                </text>
+              )}
+              <rect
+                x={xOf(i) - Math.max(12, plotW / Math.max(data.length, 1) / 2)}
+                y={PAD_T}
+                width={Math.max(24, plotW / Math.max(data.length, 1))}
+                height={PLOT_H}
+                fill="transparent"
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover(null)}
+                onFocus={() => setHover(i)}
+                onBlur={() => setHover(null)}
+                tabIndex={0}
+                role="button"
+                aria-label={`${d.fullLabel}: ${primaryLabel} ${formatValue(d.primary)}, ${secondaryLabel} ${formatValue(d.secondary)}`}
+                className="cursor-pointer outline-none"
+              />
+            </g>
+          ))}
+
+          <line x1={PAD_L} x2={W - PAD_R} y1={PAD_T + PLOT_H} y2={PAD_T + PLOT_H} stroke={GRID} strokeWidth={1} />
+        </svg>
+      </div>
+
+      {hover !== null && data[hover] && (
+        <Tooltip
+          x={(xOf(hover) / W) * 100}
+          title={data[hover].fullLabel}
+          rows={[
+            { label: primaryLabel, value: formatValue(data[hover].primary), color: primaryColor },
+            { label: secondaryLabel, value: formatValue(data[hover].secondary), color: secondaryColor },
+          ]}
         />
       )}
     </div>

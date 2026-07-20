@@ -26,6 +26,7 @@ import type {
   CourseDetail,
   DonationOverview,
   DonorDetail,
+  DualTrendPoint,
   FeeTrendPoint,
   MyProfile,
   OrgStats,
@@ -260,16 +261,6 @@ export function getCampusById(id: string): Promise<Campus | undefined> {
 export interface CampusPage {
   campuses: Campus[];
   total: number;
-}
-
-export function getTopCampuses(limit = 10): Promise<CampusPage> {
-  return live(
-    () => ({ campuses: mock.getCampuses().slice(0, limit), total: mock.getCampuses().length }),
-    async () => {
-      const all = (await loadCampuses()).sort((a, b) => b.studentCount - a.studentCount);
-      return { campuses: all.slice(0, limit), total: all.length };
-    },
-  );
 }
 
 export interface CampusSearch {
@@ -1243,6 +1234,154 @@ export function getEnrolmentTrend(): Promise<TrendPoint[]> {
         ])
         .toArray();
       return rows.map((r) => ({ ...labelsFromISOMonth(s(r._id)), value: n(r.n) }));
+    },
+  );
+}
+
+/**
+ * New enrolments vs dropouts, aligned to the same monthly buckets (any month
+ * either series touches, zero-filled for the other). dropout_date is stored
+ * as a mix of real Dates and ISO strings across records — $convert with
+ * onError/onNull keeps a bad value from failing the whole aggregation
+ * instead of just being excluded, same approach as the AI agent's
+ * analyze_enrolments tool.
+ */
+export function getEnrolmentVsDropoutTrend(): Promise<DualTrendPoint[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const [enrolRows, dropoutRows] = await Promise.all([
+        db
+          .collection("student_inductions")
+          .aggregate([
+            { $match: { createdAt: { $ne: null } } },
+            { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }, n: { $sum: 1 } } },
+          ])
+          .toArray(),
+        db
+          .collection("student_inductions")
+          .aggregate([
+            { $match: { dropout_date: { $ne: null } } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: {
+                    format: "%Y-%m",
+                    date: { $convert: { input: "$dropout_date", to: "date", onError: null, onNull: null } },
+                  },
+                },
+                n: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray(),
+      ]);
+      const enrolMap = new Map(enrolRows.map((r) => [s(r._id), n(r.n)]));
+      const dropoutMap = new Map(dropoutRows.map((r) => [s(r._id), n(r.n)]));
+      const months = [...new Set([...enrolMap.keys(), ...dropoutMap.keys()])].filter(Boolean).sort();
+      return months.map((ym) => ({
+        ...labelsFromISOMonth(ym),
+        primary: enrolMap.get(ym) ?? 0,
+        secondary: dropoutMap.get(ym) ?? 0,
+      }));
+    },
+  );
+}
+
+/**
+ * Assignment review outcomes — the real "how are submissions being
+ * evaluated" picture, from `assignment_submissions.status`. "submitted" and
+ * "late_submitted" both mean the trainer hasn't acted on it yet, so both
+ * fold into "Unreviewed".
+ */
+export function getAssessmentPerformance(): Promise<BreakdownSlice[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const rows = await db
+        .collection("assignment_submissions")
+        .aggregate([{ $group: { _id: "$status", n: { $sum: 1 } } }])
+        .toArray();
+      const byStatus = new Map(rows.map((r) => [s(r._id).toLowerCase(), n(r.n)]));
+      return [
+        { label: "Approved", value: byStatus.get("approved") ?? 0 },
+        { label: "Unreviewed", value: (byStatus.get("submitted") ?? 0) + (byStatus.get("late_submitted") ?? 0) },
+        { label: "Rejected", value: byStatus.get("not_approved") ?? 0 },
+      ];
+    },
+  );
+}
+
+/**
+ * Job-placement status values, IF this system ever starts recording them.
+ * None of the training system's real enrolment statuses currently include
+ * any of these — job placements are not tracked anywhere in the database —
+ * which is why getEmploymentTrend/getJobPlacementsByCourse below correctly
+ * return empty right now. Both queries run against student_inductions.status
+ * directly, so the moment a real record's status is ever set to one of
+ * these, they start reporting it automatically — no code change needed.
+ */
+const PLACEMENT_STATUSES = ["placed", "hired", "employed"];
+
+/** Certified students vs. job placements, per month. Empty until placement
+ *  data exists — see PLACEMENT_STATUSES above. */
+export function getEmploymentTrend(): Promise<DualTrendPoint[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const [certifiedRows, placedRows] = await Promise.all([
+        db
+          .collection("student_inductions")
+          .aggregate([
+            { $match: { status: { $in: ["passed", "completed"] }, createdAt: { $ne: null } } },
+            { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }, n: { $sum: 1 } } },
+          ])
+          .toArray(),
+        db
+          .collection("student_inductions")
+          .aggregate([
+            { $match: { status: { $in: PLACEMENT_STATUSES }, createdAt: { $ne: null } } },
+            { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }, n: { $sum: 1 } } },
+          ])
+          .toArray(),
+      ]);
+      const certifiedMap = new Map(certifiedRows.map((r) => [s(r._id), n(r.n)]));
+      const placedMap = new Map(placedRows.map((r) => [s(r._id), n(r.n)]));
+      // Only worth showing once there's at least one real placement — a
+      // certified-only trend with an empty "Employed" series would misread
+      // as "nobody gets hired" rather than "not tracked yet".
+      if (placedMap.size === 0) return [];
+      const months = [...new Set([...certifiedMap.keys(), ...placedMap.keys()])].filter(Boolean).sort();
+      return months.map((ym) => ({
+        ...labelsFromISOMonth(ym),
+        primary: certifiedMap.get(ym) ?? 0,
+        secondary: placedMap.get(ym) ?? 0,
+      }));
+    },
+  );
+}
+
+/** Job placements per course. Empty until placement data exists — see
+ *  PLACEMENT_STATUSES above. */
+export function getJobPlacementsByCourse(): Promise<BreakdownSlice[]> {
+  return live(
+    () => [],
+    async () => {
+      const db = await mongo();
+      const rows = await db
+        .collection("student_inductions")
+        .aggregate([
+          { $match: { status: { $in: PLACEMENT_STATUSES } } },
+          { $group: { _id: "$course", n: { $sum: 1 } } },
+          { $sort: { n: -1 } },
+        ])
+        .toArray();
+      if (rows.length === 0) return [];
+      const courseName = await resolveNames("courses", rows.map((r) => s(r._id)));
+      return rows.map((r) => ({ label: courseName[s(r._id)] ?? s(r._id), value: n(r.n) }));
     },
   );
 }

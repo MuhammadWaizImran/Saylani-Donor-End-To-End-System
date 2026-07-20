@@ -270,6 +270,14 @@ export interface BreakdownSlice {
   value: number;
 }
 
+/** One month of a two-series trend, e.g. enrolments vs dropouts. */
+export interface DualTrendPoint {
+  label: string;
+  fullLabel: string;
+  primary: number;
+  secondary: number;
+}
+
 /* ── Fundraising: campaigns / donations / donors ──────────────
  * From the `campaigns`, `donations`, and `public_donors` collections.
  * Read live from MongoDB. NOTE: this data is currently seeded sample

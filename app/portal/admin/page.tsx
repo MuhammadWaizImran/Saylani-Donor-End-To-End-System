@@ -1,6 +1,4 @@
-import Link from "next/link";
 import {
-  ArrowRight,
   Building2,
   CalendarCheck,
   CalendarClock,
@@ -11,20 +9,21 @@ import {
   Wallet,
 } from "lucide-react";
 import {
+  getAssessmentPerformance,
   getAttendanceOverview,
   getCourseEnrolment,
+  getEmploymentTrend,
   getEnrolmentStatusBreakdown,
-  getEnrolmentTrend,
-  getFeeTrend,
+  getEnrolmentVsDropoutTrend,
+  getJobPlacementsByCourse,
   getOrgStats,
   getPaymentOverview,
-  getTopCampuses,
   summarizeEnrolmentBuckets,
 } from "@/lib/management-api";
-import { BarList, PortalHeading, StatCard, TableShell, Td, Th, Avatar, Pill } from "@/components/portal/ui";
-import { ChartCard, ChartTable, ColumnChart, DonutChart, TrendArea } from "@/components/portal/charts";
-import { CHART_SERIES, DONUT_CERTIFIED, DONUT_DROPOUT, DONUT_ENROLLED } from "@/lib/chart-palette";
-import { formatCompact, formatCurrency } from "@/lib/utils";
+import { PortalHeading, StatCard } from "@/components/portal/ui";
+import { ChartCard, ChartTable, ColumnChart, DonutChart, MultiTrendArea } from "@/components/portal/charts";
+import { CHART_SERIES, DONUT_BLUE, DONUT_CERTIFIED, DONUT_DROPOUT, DONUT_ENROLLED, DONUT_GREEN, DONUT_RED } from "@/lib/chart-palette";
+import { formatCompact } from "@/lib/utils";
 
 /** Short, collision-free x-axis tick for a course name — the full name still
  *  shows on hover and in the table view, so nothing is actually lost. */
@@ -33,29 +32,44 @@ function shortCourseLabel(name: string): string {
   return trimmed.length > 14 ? `${trimmed.slice(0, 13)}…` : trimmed;
 }
 
+/** Consistent "nothing here yet" body for a chart backed by a real query
+ *  that just has zero matches right now (as opposed to no query at all). */
+function EmptyChart({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-[180px] items-center justify-center rounded-xl border border-dashed border-edge bg-surface-muted p-8 text-center text-sm text-ink-muted">
+      {children}
+    </div>
+  );
+}
+
 export const metadata = { title: "Admin Dashboard" };
 export const dynamic = "force-dynamic";
 
-const TOP_CAMPUSES = 10;
-
 export default async function AdminDashboardPage() {
-  const [stats, campusPage, fees, attendance, feeTrend, enrolTrend, statusBreakdown, courseEnrolment] =
-    await Promise.all([
-      getOrgStats(),
-      getTopCampuses(TOP_CAMPUSES),
-      getPaymentOverview(),
-      getAttendanceOverview(),
-      getFeeTrend(),
-      getEnrolmentTrend(),
-      getEnrolmentStatusBreakdown(),
-      getCourseEnrolment(),
-    ]);
+  const [
+    stats,
+    fees,
+    attendance,
+    statusBreakdown,
+    courseEnrolment,
+    assessmentPerformance,
+    enrolVsDropout,
+    employmentTrend,
+    jobPlacements,
+  ] = await Promise.all([
+    getOrgStats(),
+    getPaymentOverview(),
+    getAttendanceOverview(),
+    getEnrolmentStatusBreakdown(),
+    getCourseEnrolment(),
+    getAssessmentPerformance(),
+    getEnrolmentVsDropoutTrend(),
+    getEmploymentTrend(),
+    getJobPlacementsByCourse(),
+  ]);
   const coursesWithEnrolments = courseEnrolment.filter((c) => c.value > 0).length;
   const enrolmentBuckets = summarizeEnrolmentBuckets(statusBreakdown);
-  const { campuses, total: totalCampuses } = campusPage;
-  const moreCampuses = totalCampuses - campuses.length;
-  const recentPayments = fees.payments.slice(0, 5);
-  const maxStudents = Math.max(1, ...campuses.map((c) => c.studentCount));
+  const totalAssessments = assessmentPerformance.reduce((a, b) => a + b.value, 0);
 
   const cards = [
     { icon: Building2, label: "Total campuses", value: String(stats.totalCampuses) },
@@ -82,56 +96,8 @@ export default async function AdminDashboardPage() {
         ))}
       </div>
 
-      {/* Fee collection — the widest series we have (real billing months) */}
-      <div className="mt-10">
-        <ChartCard
-          title="Fee collection by month"
-          subtitle={`Billed fees split into collected and outstanding · ${feeTrend.length} months on record`}
-          legend={[
-            { label: "Collected", color: CHART_SERIES[0] },
-            { label: "Outstanding", color: CHART_SERIES[1] },
-          ]}
-          table={
-            <ChartTable
-              head={["Month", "Collected", "Outstanding", "Total billed"]}
-              rows={feeTrend.map((p) => [
-                p.fullLabel,
-                formatCurrency(p.collected),
-                formatCurrency(p.outstanding),
-                formatCurrency(p.collected + p.outstanding),
-              ])}
-            />
-          }
-        >
-          <ColumnChart
-            data={feeTrend.map((p) => ({
-              label: p.label,
-              fullLabel: p.fullLabel,
-              values: [p.collected, p.outstanding],
-            }))}
-            series={[
-              { label: "Collected", color: CHART_SERIES[0] },
-              { label: "Outstanding", color: CHART_SERIES[1] },
-            ]}
-            format="compact"
-          />
-        </ChartCard>
-      </div>
-
-      <div className="mt-8 grid gap-8 lg:grid-cols-2">
-        <ChartCard
-          title="New enrolments by month"
-          subtitle={`${enrolTrend.reduce((a, p) => a + p.value, 0).toLocaleString()} enrolments since ${enrolTrend[0]?.fullLabel ?? "—"}`}
-          table={
-            <ChartTable
-              head={["Month", "Enrolments"]}
-              rows={enrolTrend.map((p) => [p.fullLabel, p.value.toLocaleString()])}
-            />
-          }
-        >
-          <TrendArea data={enrolTrend} format="number" />
-        </ChartCard>
-
+      {/* Row 1 — the two "state of the pipeline" donuts */}
+      <div className="mt-10 grid gap-8 lg:grid-cols-2">
         <ChartCard
           title="Enrolment breakdown"
           subtitle="Where every student stands, at a glance — the full status-by-status detail is one click away in the table view"
@@ -157,10 +123,39 @@ export default async function AdminDashboardPage() {
             ]}
           />
         </ChartCard>
+
+        <ChartCard
+          title="Assessment performance"
+          subtitle="How assignment submissions are being reviewed and where they land"
+          legend={[
+            { label: "Approved", color: DONUT_GREEN },
+            { label: "Unreviewed", color: DONUT_BLUE },
+            { label: "Rejected", color: DONUT_RED },
+          ]}
+          table={
+            <ChartTable
+              head={["Outcome", "Submissions"]}
+              rows={assessmentPerformance.map((s) => [s.label, s.value.toLocaleString()])}
+            />
+          }
+        >
+          {totalAssessments === 0 ? (
+            <EmptyChart>No assignment submissions recorded yet.</EmptyChart>
+          ) : (
+            <DonutChart
+              centerLabel="Submissions"
+              format="number"
+              data={assessmentPerformance.map((s) => ({
+                ...s,
+                color: s.label === "Approved" ? DONUT_GREEN : s.label === "Rejected" ? DONUT_RED : DONUT_BLUE,
+              }))}
+            />
+          )}
+        </ChartCard>
       </div>
 
-      {/* Course enrolment — every course in the catalog, zeros included */}
-      <div className="mt-8">
+      {/* Row 2 — course enrolment, and enrolments vs dropouts over time */}
+      <div className="mt-8 grid gap-8 lg:grid-cols-2">
         <ChartCard
           title="Course enrolment"
           subtitle={`How many students are enrolled on each course · ${coursesWithEnrolments} of ${courseEnrolment.length} courses have anyone enrolled`}
@@ -181,100 +176,101 @@ export default async function AdminDashboardPage() {
             format="number"
           />
         </ChartCard>
-      </div>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-2">
-        <section aria-labelledby="campus-performance-heading" className="portal-glow rounded-2xl border border-edge bg-surface p-6">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 id="campus-performance-heading" className="font-display text-xl text-ink-strong">
-              Students by campus
-            </h2>
-            <Link href="/portal/admin/campuses" className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline">
-              All campuses <ArrowRight className="h-3 w-3" aria-hidden />
-            </Link>
-          </div>
-          <BarList
-            items={campuses.map((c) => ({
-              label: `${c.name} — ${c.city}`,
-              sub: `${c.studentCount.toLocaleString()} students · ${c.trainerCount} trainers`,
-              percent: Math.round((c.studentCount / maxStudents) * 100),
-            }))}
+        <ChartCard
+          title="Enrolment over time"
+          subtitle="How new enrolments and dropouts have moved, month by month"
+          legend={[
+            { label: "Enrolments", color: CHART_SERIES[0] },
+            { label: "Dropouts", color: DONUT_RED },
+          ]}
+          table={
+            <ChartTable
+              head={["Month", "Enrolments", "Dropouts"]}
+              rows={enrolVsDropout.map((p) => [p.fullLabel, p.primary.toLocaleString(), p.secondary.toLocaleString()])}
+            />
+          }
+        >
+          <MultiTrendArea
+            data={enrolVsDropout}
+            primaryLabel="Enrolments"
+            secondaryLabel="Dropouts"
+            primaryColor={CHART_SERIES[0]}
+            secondaryColor={DONUT_RED}
+            format="number"
           />
-        </section>
-
-        <section aria-labelledby="recent-payments-heading" className="portal-glow rounded-2xl border border-edge bg-surface p-6">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 id="recent-payments-heading" className="font-display text-xl text-ink-strong">
-              Recent fee invoices
-            </h2>
-            <Link href="/portal/admin/payments" className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline">
-              All payments <ArrowRight className="h-3 w-3" aria-hidden />
-            </Link>
-          </div>
-          <ul className="divide-y divide-edge">
-            {recentPayments.map((p) => (
-              <li key={p.id} className="flex items-center gap-3 py-3">
-                <Avatar name={p.studentName} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-ink">{p.studentName}</p>
-                  <p className="truncate text-xs text-ink-muted">{p.billingMonth} · due {p.dueDate || "—"}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-brand-700">{formatCurrency(p.amount)}</p>
-                  {p.status === "paid" ? <Pill tone="green">Paid</Pill> : <Pill tone="amber">Pending</Pill>}
-                </div>
-              </li>
-            ))}
-            {recentPayments.length === 0 && (
-              <li className="py-8 text-center text-sm text-ink-muted">No fee invoices recorded yet.</li>
-            )}
-          </ul>
-        </section>
+        </ChartCard>
       </div>
 
-      <section aria-labelledby="campus-table-heading" className="mt-10">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 id="campus-table-heading" className="font-display text-xl text-ink-strong">
-            Campus summary <span className="font-sans text-sm text-ink-muted">(top {campuses.length} by students)</span>
-          </h2>
-          <Link href="/portal/admin/campuses" className="flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline">
-            All {totalCampuses.toLocaleString()} campuses <ArrowRight className="h-3 w-3" aria-hidden />
-          </Link>
-        </div>
-        <TableShell>
-          <thead>
-            <tr className="border-b border-edge bg-surface-muted">
-              <Th>Campus</Th>
-              <Th>Students</Th>
-              <Th>Trainers</Th>
-              <Th>Courses</Th>
-              <Th>Established</Th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-edge">
-            {campuses.map((c) => (
-              <tr key={c.id} className="hover:bg-surface-muted/60">
-                <Td>
-                  <span className="font-semibold text-ink">{c.name}</span>
-                  <span className="block text-xs text-ink-muted">{c.city}</span>
-                </Td>
-                <Td>{c.studentCount.toLocaleString()}</Td>
-                <Td>{c.trainerCount}</Td>
-                <Td>{c.courseCount}</Td>
-                <Td className="text-ink-muted">{c.established || "—"}</Td>
-              </tr>
-            ))}
-          </tbody>
-        </TableShell>
-        {moreCampuses > 0 && (
-          <p className="mt-3 text-center text-sm text-ink-muted">
-            +{moreCampuses.toLocaleString()} more campuses —{" "}
-            <Link href="/portal/admin/campuses" className="font-semibold text-brand-700 hover:underline">
-              view all in Campuses
-            </Link>
-          </p>
-        )}
-      </section>
+      {/* Row 3 — employment. Genuinely not tracked in the source system today
+          (see getEmploymentTrend/getJobPlacementsByCourse): both queries run
+          for real against student_inductions.status, and will start showing
+          data automatically the moment any record's status becomes
+          placed/hired/employed — no code change needed then. */}
+      <div className="mt-8 grid gap-8 lg:grid-cols-2">
+        <ChartCard
+          title="Employment trend"
+          subtitle="Certified students vs. confirmed job placements, month by month"
+          legend={
+            employmentTrend.length > 0
+              ? [
+                  { label: "Certified", color: CHART_SERIES[0] },
+                  { label: "Employed", color: CHART_SERIES[1] },
+                ]
+              : undefined
+          }
+          table={
+            <ChartTable
+              head={["Month", "Certified", "Employed"]}
+              rows={employmentTrend.map((p) => [p.fullLabel, p.primary.toLocaleString(), p.secondary.toLocaleString()])}
+            />
+          }
+        >
+          {employmentTrend.length === 0 ? (
+            <EmptyChart>
+              Job placements aren&apos;t tracked in the training system yet, so there&apos;s nothing to
+              chart. The moment placement data exists, this fills in on its own.
+            </EmptyChart>
+          ) : (
+            <MultiTrendArea
+              data={employmentTrend}
+              primaryLabel="Certified"
+              secondaryLabel="Employed"
+              primaryColor={CHART_SERIES[0]}
+              secondaryColor={CHART_SERIES[1]}
+              format="number"
+            />
+          )}
+        </ChartCard>
+
+        <ChartCard
+          title="Job placements"
+          subtitle="Which courses are producing the most employed graduates"
+          table={
+            <ChartTable
+              head={["Course", "Placements"]}
+              rows={jobPlacements.map((c) => [c.label, c.value.toLocaleString()])}
+            />
+          }
+        >
+          {jobPlacements.length === 0 ? (
+            <EmptyChart>
+              No job placements have been recorded yet. Once the training system starts tracking
+              them, this chart populates automatically.
+            </EmptyChart>
+          ) : (
+            <ColumnChart
+              data={jobPlacements.map((c) => ({
+                label: shortCourseLabel(c.label),
+                fullLabel: c.label,
+                values: [c.value],
+              }))}
+              series={[{ label: "Placements", color: CHART_SERIES[0] }]}
+              format="number"
+            />
+          )}
+        </ChartCard>
+      </div>
     </>
   );
 }
