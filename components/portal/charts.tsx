@@ -36,12 +36,18 @@ const STACK_GAP = 2; // surface gap between touching segments
 /* ── geometry helpers ──────────────────────────────────────── */
 
 /** Round a max up to clean axis ticks (0 / 1,000 / 2,000 …). */
-function niceTicks(max: number, count = 4): number[] {
+/** `wholeNumbers`: when the axis is counting whole things (people, records —
+ *  format="number"), the step is never allowed below 1. Otherwise a small
+ *  max (e.g. 2) can produce a 0.5 step, which a "number" formatter that
+ *  rounds for display then shows as two ticks with the same rounded label
+ *  (0, 1, 1, 2, 2). */
+function niceTicks(max: number, count = 4, wholeNumbers = false): number[] {
   if (max <= 0) return [0];
   const raw = max / count;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const norm = raw / mag;
-  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  let step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  if (wholeNumbers) step = Math.max(1, Math.round(step));
   const ticks: number[] = [];
   for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(Math.round(v * 1000) / 1000);
   return ticks;
@@ -266,7 +272,7 @@ export function ColumnChart({
   const barW = Math.min(BAR_MAX, band * 0.62);
 
   const totals = data.map((d) => d.values.reduce((a, b) => a + b, 0));
-  const ticks = niceTicks(Math.max(...totals, 0));
+  const ticks = niceTicks(Math.max(...totals, 0), 4, format === "number");
   const maxTick = ticks[ticks.length - 1] || 1;
   const yOf = (v: number) => PAD_T + PLOT_H - (v / maxTick) * PLOT_H;
 
@@ -400,7 +406,7 @@ export function TrendArea({
   const W = Math.max(minW, width || minW);
   const plotW = W - PAD_L - PAD_R;
 
-  const ticks = niceTicks(Math.max(...data.map((d) => d.value), 0));
+  const ticks = niceTicks(Math.max(...data.map((d) => d.value), 0), 4, format === "number");
   const maxTick = ticks[ticks.length - 1] || 1;
   const xOf = (i: number) => (data.length === 1 ? PAD_L + plotW / 2 : PAD_L + (i / (data.length - 1)) * plotW);
   const yOf = (v: number) => PAD_T + PLOT_H - (v / maxTick) * PLOT_H;
@@ -555,7 +561,7 @@ export function MultiTrendArea({
   const plotW = W - PAD_L - PAD_R;
 
   const maxVal = Math.max(...data.map((d) => Math.max(d.primary, d.secondary)), 0);
-  const ticks = niceTicks(maxVal);
+  const ticks = niceTicks(maxVal, 4, format === "number");
   const maxTick = ticks[ticks.length - 1] || 1;
   const xOf = (i: number) => (data.length === 1 ? PAD_L + plotW / 2 : PAD_L + (i / (data.length - 1)) * plotW);
   const yOf = (v: number) => PAD_T + PLOT_H - (v / maxTick) * PLOT_H;

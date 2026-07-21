@@ -1350,10 +1350,9 @@ export function getEmploymentTrend(): Promise<DualTrendPoint[]> {
       ]);
       const certifiedMap = new Map(certifiedRows.map((r) => [s(r._id), n(r.n)]));
       const placedMap = new Map(placedRows.map((r) => [s(r._id), n(r.n)]));
-      // Only worth showing once there's at least one real placement — a
-      // certified-only trend with an empty "Employed" series would misread
-      // as "nobody gets hired" rather than "not tracked yet".
-      if (placedMap.size === 0) return [];
+      // Certified is real data either way. Employed stays honestly at 0 for
+      // every month until a real placement exists — an actual flat line, not
+      // an empty-state message; the chart itself is the honest signal here.
       const months = [...new Set([...certifiedMap.keys(), ...placedMap.keys()])].filter(Boolean).sort();
       return months.map((ym) => ({
         ...labelsFromISOMonth(ym),
@@ -1488,6 +1487,192 @@ export function getCourseEnrolment(): Promise<BreakdownSlice[]> {
         .sort((a, b) => b.value - a.value);
     },
   );
+}
+
+/** Everything the "Export to sheet" button (Sponsorship Impact Report)
+ *  needs, scoped to one campus — or every campus when `campusId` is null. */
+export interface SponsorshipReportData {
+  campusName: string;
+  generatedAt: string;
+  generatedBy: string;
+  totalStudents: number;
+  activeClasses: number;
+  coursesRunning: number;
+  trainersOnboard: number;
+  enrolmentBreakdown: BreakdownSlice[];
+  assessmentPerformance: BreakdownSlice[];
+  courseEnrolment: BreakdownSlice[];
+  jobPlacements: BreakdownSlice[];
+  enrolmentOverTime: DualTrendPoint[];
+  employmentTrend: DualTrendPoint[];
+}
+
+export async function getSponsorshipReportData(
+  campusId: string | null,
+  generatedBy: string,
+): Promise<SponsorshipReportData> {
+  const db = await mongo();
+  const inductionMatch: Record<string, unknown> = {};
+  if (campusId) inductionMatch.campus = idMatch(campusId);
+
+  const [
+    campusDoc,
+    totalStudents,
+    activeClasses,
+    coursesRunning,
+    trainersOnboard,
+    statusRows,
+    assessmentRows,
+    courseRows,
+    courseCatalog,
+    placementCourseRows,
+    enrolRows,
+    dropoutRows,
+    certifiedRows,
+    placedRows,
+  ] = await Promise.all([
+    campusId ? db.collection("campus").findOne({ _id: idMatch(campusId) } as Doc, { projection: { en: 1 } }) : null,
+    db.collection("student_inductions").countDocuments(inductionMatch),
+    db
+      .collection("slots")
+      // No status filter — matches getOrgStats' own "Active classes" stat
+      // card exactly (an all-slots count), so the report never disagrees
+      // with the live dashboard for the same scope.
+      .countDocuments(campusId ? { campus: idMatch(campusId) } : {}),
+    db
+      .collection("new_courses")
+      .countDocuments(campusId ? { campuses: idMatch(campusId), status: true } : { status: true }),
+    db.collection("trainers").countDocuments(campusId ? { campus: idMatch(campusId) } : {}),
+    db
+      .collection("student_inductions")
+      .aggregate([{ $match: inductionMatch }, { $group: { _id: "$status", n: { $sum: 1 } } }])
+      .toArray(),
+    // assignment_submissions has no campus field of its own — join through
+    // the enrolment it belongs to, same as getAssessmentPerformance but with
+    // the campus filter applied on the joined side.
+    db
+      .collection("assignment_submissions")
+      .aggregate([
+        { $lookup: { from: "student_inductions", localField: "student_induction", foreignField: "_id", as: "ind" } },
+        { $unwind: { path: "$ind", preserveNullAndEmptyArrays: true } },
+        ...(campusId ? [{ $match: { "ind.campus": idMatch(campusId) } }] : []),
+        { $group: { _id: "$status", n: { $sum: 1 } } },
+      ])
+      .toArray(),
+    db
+      .collection("student_inductions")
+      .aggregate([{ $match: inductionMatch }, { $group: { _id: "$course", n: { $sum: 1 } } }])
+      .toArray(),
+    db.collection("courses").find({}, { projection: { "en.course_name": 1 } }).toArray(),
+    db
+      .collection("student_inductions")
+      .aggregate([
+        { $match: { ...inductionMatch, status: { $in: PLACEMENT_STATUSES } } },
+        { $group: { _id: "$course", n: { $sum: 1 } } },
+      ])
+      .toArray(),
+    db
+      .collection("student_inductions")
+      .aggregate([
+        { $match: { ...inductionMatch, createdAt: { $ne: null } } },
+        { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }, n: { $sum: 1 } } },
+      ])
+      .toArray(),
+    db
+      .collection("student_inductions")
+      .aggregate([
+        { $match: { ...inductionMatch, dropout_date: { $ne: null } } },
+        {
+          $group: {
+            _id: {
+              $dateToString: {
+                format: "%Y-%m",
+                date: { $convert: { input: "$dropout_date", to: "date", onError: null, onNull: null } },
+              },
+            },
+            n: { $sum: 1 },
+          },
+        },
+      ])
+      .toArray(),
+    db
+      .collection("student_inductions")
+      .aggregate([
+        { $match: { ...inductionMatch, status: { $in: ["passed", "completed"] }, createdAt: { $ne: null } } },
+        { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }, n: { $sum: 1 } } },
+      ])
+      .toArray(),
+    db
+      .collection("student_inductions")
+      .aggregate([
+        { $match: { ...inductionMatch, status: { $in: PLACEMENT_STATUSES }, createdAt: { $ne: null } } },
+        { $group: { _id: { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }, n: { $sum: 1 } } },
+      ])
+      .toArray(),
+  ]);
+
+  const enrolmentBreakdown = statusRows.map((r) => {
+    const raw = s(r._id) || "unknown";
+    return { label: raw.charAt(0).toUpperCase() + raw.slice(1), value: n(r.n) };
+  });
+
+  const assessByStatus = new Map(assessmentRows.map((r) => [s(r._id).toLowerCase(), n(r.n)]));
+  const assessmentPerformance = [
+    { label: "Approved", value: assessByStatus.get("approved") ?? 0 },
+    { label: "Unreviewed", value: (assessByStatus.get("submitted") ?? 0) + (assessByStatus.get("late_submitted") ?? 0) },
+    { label: "Rejected", value: assessByStatus.get("not_approved") ?? 0 },
+  ];
+
+  const courseNameByName = new Map<string, number>();
+  const catalogNames = new Map(courseCatalog.map((c) => [s(c._id), (s(c.en?.course_name) || "Untitled course").trim()]));
+  const byCourseCount = new Map(courseRows.map((r) => [s(r._id), n(r.n)]));
+  for (const [id, name] of catalogNames) {
+    courseNameByName.set(name, (courseNameByName.get(name) ?? 0) + (byCourseCount.get(id) ?? 0));
+  }
+  const courseEnrolment = [...courseNameByName.entries()]
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value);
+
+  const jobPlacements =
+    placementCourseRows.length === 0
+      ? []
+      : placementCourseRows
+          .map((r) => ({ label: catalogNames.get(s(r._id)) ?? s(r._id), value: n(r.n) }))
+          .sort((a, b) => b.value - a.value);
+
+  const enrolMap = new Map(enrolRows.map((r) => [s(r._id), n(r.n)]));
+  const dropoutMap = new Map(dropoutRows.map((r) => [s(r._id), n(r.n)]));
+  const trendMonths = [...new Set([...enrolMap.keys(), ...dropoutMap.keys()])].filter(Boolean).sort();
+  const enrolmentOverTime = trendMonths.map((ym) => ({
+    ...labelsFromISOMonth(ym),
+    primary: enrolMap.get(ym) ?? 0,
+    secondary: dropoutMap.get(ym) ?? 0,
+  }));
+
+  const certifiedMap = new Map(certifiedRows.map((r) => [s(r._id), n(r.n)]));
+  const placedMap = new Map(placedRows.map((r) => [s(r._id), n(r.n)]));
+  const empMonths = [...new Set([...certifiedMap.keys(), ...placedMap.keys()])].filter(Boolean).sort();
+  const employmentTrend = empMonths.map((ym) => ({
+    ...labelsFromISOMonth(ym),
+    primary: certifiedMap.get(ym) ?? 0,
+    secondary: placedMap.get(ym) ?? 0,
+  }));
+
+  return {
+    campusName: campusId ? (s(campusDoc?.en?.campus_name) || "Selected campus") : "All Campuses",
+    generatedAt: new Date().toISOString(),
+    generatedBy,
+    totalStudents,
+    activeClasses,
+    coursesRunning,
+    trainersOnboard,
+    enrolmentBreakdown,
+    assessmentPerformance,
+    courseEnrolment,
+    jobPlacements,
+    enrolmentOverTime,
+    employmentTrend,
+  };
 }
 
 /**

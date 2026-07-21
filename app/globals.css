@@ -104,6 +104,16 @@
   --chart-donut-certified: #0b73b7;
   --chart-donut-dropout: #b91c1c;
 
+  /* Dashboard reference-match colours (user-supplied screenshots, sampled
+     pixel-exact): a brighter single-series blue for Course Enrolment, and a
+     green/dropout-red pair for Enrolment Over Time. The green+red pair sits
+     just under the CVD floor (ΔE 5.5, floor is 6) — legal per the checker's
+     own rule ONLY because this chart already carries the required secondary
+     encoding (a text legend + a full data table), which it does. */
+  --chart-bright-blue: #227eff;
+  --chart-trend-green: #60c92c;
+  --chart-trend-red: #ff6163;
+
   /* Page wash behind the cards (see body below). */
   --page-bg: #edf4f9;
   --page-tint-from: rgba(11, 115, 183, 0.07);
@@ -161,6 +171,12 @@
   --chart-donut-enrolled: #6da800;
   --chart-donut-certified: #2e8ac9;
   --chart-donut-dropout: #dc2626;
+
+  /* Same reference-match colours, re-stepped into the dark lightness band
+     (0.48–0.67) — the light-mode hexes are too light for #101c28. */
+  --chart-bright-blue: #227eff;
+  --chart-trend-green: #4caf1f;
+  --chart-trend-red: #e33d40;
 
   --page-bg: #060d14;
   --page-tint-from: rgba(11, 115, 183, 0.12);

@@ -11,6 +11,7 @@ import {
 import {
   getAssessmentPerformance,
   getAttendanceOverview,
+  getCampuses,
   getCourseEnrolment,
   getEmploymentTrend,
   getEnrolmentStatusBreakdown,
@@ -22,7 +23,19 @@ import {
 } from "@/lib/management-api";
 import { PortalHeading, StatCard } from "@/components/portal/ui";
 import { ChartCard, ChartTable, ColumnChart, DonutChart, MultiTrendArea } from "@/components/portal/charts";
-import { CHART_SERIES, DONUT_BLUE, DONUT_CERTIFIED, DONUT_DROPOUT, DONUT_ENROLLED, DONUT_GREEN, DONUT_RED } from "@/lib/chart-palette";
+import { ExportReportButton } from "@/components/portal/export-report-button";
+import {
+  BRIGHT_BLUE,
+  CHART_SERIES,
+  DONUT_BLUE,
+  DONUT_CERTIFIED,
+  DONUT_DROPOUT,
+  DONUT_ENROLLED,
+  DONUT_GREEN,
+  DONUT_RED,
+  TREND_GREEN,
+  TREND_RED,
+} from "@/lib/chart-palette";
 import { formatCompact } from "@/lib/utils";
 
 /** Short, collision-free x-axis tick for a course name — the full name still
@@ -56,6 +69,7 @@ export default async function AdminDashboardPage() {
     enrolVsDropout,
     employmentTrend,
     jobPlacements,
+    campuses,
   ] = await Promise.all([
     getOrgStats(),
     getPaymentOverview(),
@@ -66,6 +80,7 @@ export default async function AdminDashboardPage() {
     getEnrolmentVsDropoutTrend(),
     getEmploymentTrend(),
     getJobPlacementsByCourse(),
+    getCampuses(),
   ]);
   const coursesWithEnrolments = courseEnrolment.filter((c) => c.value > 0).length;
   const enrolmentBuckets = summarizeEnrolmentBuckets(statusBreakdown);
@@ -84,11 +99,14 @@ export default async function AdminDashboardPage() {
 
   return (
     <>
-      <PortalHeading
-        title="Organization"
-        accent="at a glance"
-        description="Live view of every campus, classroom, and rupee Saylani is managing right now."
-      />
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <PortalHeading
+          title="Organization"
+          accent="at a glance"
+          description="Live view of every campus, classroom, and rupee Saylani is managing right now."
+        />
+        <ExportReportButton campuses={campuses.map((c) => ({ id: c.id, name: c.name }))} />
+      </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {cards.map((card) => (
@@ -172,7 +190,7 @@ export default async function AdminDashboardPage() {
               fullLabel: c.label,
               values: [c.value],
             }))}
-            series={[{ label: "Students enrolled", color: CHART_SERIES[0] }]}
+            series={[{ label: "Students enrolled", color: BRIGHT_BLUE }]}
             format="number"
           />
         </ChartCard>
@@ -181,8 +199,8 @@ export default async function AdminDashboardPage() {
           title="Enrolment over time"
           subtitle="How new enrolments and dropouts have moved, month by month"
           legend={[
-            { label: "Enrolments", color: CHART_SERIES[0] },
-            { label: "Dropouts", color: DONUT_RED },
+            { label: "Enrolments", color: TREND_GREEN },
+            { label: "Dropouts", color: TREND_RED },
           ]}
           table={
             <ChartTable
@@ -195,8 +213,8 @@ export default async function AdminDashboardPage() {
             data={enrolVsDropout}
             primaryLabel="Enrolments"
             secondaryLabel="Dropouts"
-            primaryColor={CHART_SERIES[0]}
-            secondaryColor={DONUT_RED}
+            primaryColor={TREND_GREEN}
+            secondaryColor={TREND_RED}
             format="number"
           />
         </ChartCard>
@@ -211,14 +229,10 @@ export default async function AdminDashboardPage() {
         <ChartCard
           title="Employment trend"
           subtitle="Certified students vs. confirmed job placements, month by month"
-          legend={
-            employmentTrend.length > 0
-              ? [
-                  { label: "Certified", color: CHART_SERIES[0] },
-                  { label: "Employed", color: CHART_SERIES[1] },
-                ]
-              : undefined
-          }
+          legend={[
+            { label: "Certified", color: BRIGHT_BLUE },
+            { label: "Employed", color: TREND_GREEN },
+          ]}
           table={
             <ChartTable
               head={["Month", "Certified", "Employed"]}
@@ -227,17 +241,16 @@ export default async function AdminDashboardPage() {
           }
         >
           {employmentTrend.length === 0 ? (
-            <EmptyChart>
-              Job placements aren&apos;t tracked in the training system yet, so there&apos;s nothing to
-              chart. The moment placement data exists, this fills in on its own.
-            </EmptyChart>
+            // Only possible if the system has no certified-student history at
+            // all — there's genuinely no axis to draw in that case.
+            <EmptyChart>No enrolment history to chart yet.</EmptyChart>
           ) : (
             <MultiTrendArea
               data={employmentTrend}
               primaryLabel="Certified"
               secondaryLabel="Employed"
-              primaryColor={CHART_SERIES[0]}
-              secondaryColor={CHART_SERIES[1]}
+              primaryColor={BRIGHT_BLUE}
+              secondaryColor={TREND_GREEN}
               format="number"
             />
           )}
