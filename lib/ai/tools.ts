@@ -529,6 +529,162 @@ function matchByName<T extends { id: string; name?: string; title?: string }>(
 const err = (message: string) => JSON.stringify({ error: message });
 const argStr = (args: Record<string, unknown>, key: string) => String(args[key] ?? "").trim();
 
+type Row = Record<string, unknown>;
+
+/** Which collection a foreign-key field points at, derived from the same
+ *  RELATIONS map describe_schema serves. Written once here rather than
+ *  re-parsed per row. */
+const FK_TARGET: Record<string, string> = {
+  campus: "campus",
+  campuses: "campus",
+  city: "cities",
+  country: "countries",
+  course: "courses",
+  courses: "courses",
+  new_course: "new_courses",
+  trainer: "trainers",
+  slot: "slots",
+  student: "students",
+  student_id: "students",
+  student_induction: "student_inductions",
+  quiz: "quizzes",
+  assignment: "assignments",
+  module: "course_modules",
+  course_module: "course_modules",
+  course_topic: "course_topics",
+  action_by: "users",
+  created_by: "users",
+  updated_by: "users",
+  sponsored_by: "donors",
+};
+
+/** Pull a human name out of a referenced document, whatever shape it uses —
+ *  this database stores names bilingually nested (en.campus_name), flat
+ *  (full_name), or as a title, depending on the collection. */
+function displayName(doc: Row | null): string | null {
+  if (!doc) return null;
+  const en = doc.en as Row | undefined;
+  const nested = en && (en.campus_name ?? en.course_name ?? en.trainer_name ?? en.city_name ?? en.country_name);
+  const flat = doc.full_name ?? doc.name ?? doc.title ?? doc.student_name ?? doc.email;
+  const picked = nested ?? flat;
+  return typeof picked === "string" ? picked.trim() : null;
+}
+
+/**
+ * Replaces raw ObjectIds in returned rows with readable names.
+ *
+ * Without this the model gets `"campus": "67483a90…"` back, and the prompt
+ * (rightly) tells it never to report a raw id — so it spends its remaining
+ * tool rounds looking each one up and runs out before it can answer at all.
+ * One batched lookup per referenced collection here costs a fraction of that
+ * and lets the model answer from the first result.
+ */
+async function resolveForeignKeys(
+  db: Awaited<ReturnType<typeof mongo>>,
+  collection: string,
+  rows: Row[],
+): Promise<Row[]> {
+  if (rows.length === 0) return rows;
+
+  // Foreign keys arrive as ObjectId instances, not strings — only
+  // JSON.stringify makes them look like strings later — so match on the
+  // stringified form to catch both, since this database stores some keys
+  // as ObjectId and some as plain hex strings.
+  const hex = (v: unknown): string | null => {
+    const s = typeof v === "string" ? v : v instanceof ObjectId ? v.toHexString() : "";
+    return /^[a-f0-9]{24}$/i.test(s) ? s : null;
+  };
+
+  // Gather every id referenced, grouped by the collection it points at.
+  const wanted = new Map<string, Set<string>>();
+  for (const row of rows) {
+    for (const [field, value] of Object.entries(row)) {
+      const target = FK_TARGET[field];
+      if (!target || target === collection) continue;
+      for (const v of Array.isArray(value) ? value : [value]) {
+        const id = hex(v);
+        if (!id) continue;
+        if (!wanted.has(target)) wanted.set(target, new Set());
+        wanted.get(target)!.add(id);
+      }
+    }
+  }
+  if (wanted.size === 0) return rows;
+
+  // One query per referenced collection, not one per row.
+  const names = new Map<string, string>();
+  await Promise.all(
+    [...wanted].map(async ([target, ids]) => {
+      const docs = await db
+        .collection(target)
+        .find({ _id: { $in: [...ids].map((i) => new ObjectId(i)) } })
+        .toArray()
+        .catch(() => []);
+
+      /* `new_courses` and `slots` carry no name of their own — a batch and a
+         timetabled section are both identified by the COURSE they teach. One
+         extra batched hop turns "683571d6…" into "Web & App Development —
+         batch 12" instead of leaving the model an id it is told never to
+         print. */
+      let courseNames: Map<string, string> | null = null;
+      if (target === "new_courses" || target === "slots") {
+        const viaField = target === "new_courses" ? "course" : "new_course";
+        const step1 = docs.map((d) => d[viaField]).filter(Boolean);
+        const midDocs =
+          target === "slots"
+            ? await db.collection("new_courses").find({ _id: { $in: step1 as ObjectId[] } }).toArray().catch(() => [])
+            : docs;
+        const courseIds = (target === "slots" ? midDocs.map((d) => d.course) : step1).filter(Boolean);
+        const courses = await db
+          .collection("courses")
+          .find({ _id: { $in: courseIds as ObjectId[] } })
+          .toArray()
+          .catch(() => []);
+        courseNames = new Map(courses.map((c) => [String(c._id), displayName(c as Row) ?? ""]));
+        if (target === "slots") {
+          const ncToCourse = new Map(midDocs.map((m) => [String(m._id), String(m.course)]));
+          for (const d of docs) {
+            const cid = ncToCourse.get(String(d.new_course));
+            const cname = cid ? courseNames.get(cid) : null;
+            if (cname) names.set(`slots:${String(d._id)}`, `${cname} (slot)`);
+          }
+        }
+      }
+
+      for (const d of docs) {
+        let n = displayName(d as Row);
+        if (!n && target === "new_courses" && courseNames) {
+          const cname = courseNames.get(String(d.course));
+          if (cname) n = d.batch_number ? `${cname} — batch ${d.batch_number}` : cname;
+        }
+        if (n) names.set(`${target}:${String(d._id)}`, n);
+      }
+    }),
+  );
+
+  return rows.map((row) => {
+    const out: Row = {};
+    for (const [field, value] of Object.entries(row)) {
+      const target = FK_TARGET[field];
+      if (!target || target === collection) {
+        out[field] = value;
+        continue;
+      }
+      const nameOf = (v: unknown) => {
+        const id = hex(v);
+        if (!id) return v;
+        const name = names.get(`${target}:${id}`);
+        // A reference with no matching row is a real integrity problem in the
+        // source data. Labelling it stops the model from printing a bare id
+        // as though it identified something.
+        return name ?? `(no matching ${target} record)`;
+      };
+      out[field] = Array.isArray(value) ? value.map(nameOf) : nameOf(value);
+    }
+    return out;
+  });
+}
+
 /** Every reporting tool returns provenance so factual answers are auditable. */
 function evidence(collections: string[], filters: Record<string, unknown>) {
   return {
@@ -801,7 +957,7 @@ export async function executeTool(
         matched: total,
         returned: rows.length,
         ...(total > rows.length ? { note: `Showing ${rows.length} of ${total}. Narrow the filter for the rest.` } : {}),
-        rows: redact(rows),
+        rows: await resolveForeignKeys(db, collection, redact(rows) as Row[]),
       });
     }
 
