@@ -9,6 +9,7 @@
     "lint": "eslint",
     "auth:seed": "tsx scripts/auth-seed.ts",
     "seed:test-admin": "tsx scripts/seed-test-admin.ts",
+    "secure:test-accounts": "tsx --env-file=.env.local scripts/secure-test-accounts.ts",
     "db:indexes": "tsx --env-file=.env.local scripts/ensure-indexes.ts",
     "verify:data": "tsx --env-file=.env.local scripts/verify-data.ts",
     "verify:agent-data": "tsx --env-file=.env.local scripts/verify-agent-data.ts",
