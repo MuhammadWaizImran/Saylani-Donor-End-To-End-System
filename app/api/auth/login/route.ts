@@ -21,6 +21,7 @@ const schema = z.object({
  *  index ensured by scripts/ensure-indexes.ts on each collection's `email`
  *  field, so this stays a real index lookup as the collections grow. */
 const EMAIL_COLLATION = { locale: "en", strength: 2 } as const;
+const ADMIN_ROLES = new Set(["admin", "ADMIN", "super_admin", "SUPER_ADMIN"]);
 
 async function findAccount(
   role: UserRole,
@@ -32,7 +33,11 @@ async function findAccount(
 
   if (role === "admin") {
     const doc = await db.collection("users").findOne(emailFilter, opts);
-    if (!doc?.password) return null;
+    // The portal's admin tab must not turn receptionist/campus-manager
+    // accounts into full administrators merely because they live in users.
+    if (!doc?.password || !ADMIN_ROLES.has(String(doc.role ?? "")) || String(doc.status ?? "active").toLowerCase() !== "active") {
+      return null;
+    }
     return {
       session: { userId: String(doc._id), name: doc.name ?? doc.email, email: doc.email, role: "admin" },
       passwordHash: doc.password,

@@ -11,8 +11,10 @@
  * class attendance DOES exist (the `attendances` collection) but only
  * covers a handful of students — see getAttendanceOverview().
  *
- * Every function falls back to the bundled mock data if MongoDB is
- * unreachable/unconfigured, so the app never hard-fails.
+ * When MongoDB is configured, every function must use it. Returning bundled
+ * mock rows after a live-query failure would make an operations dashboard and
+ * its AI assistant report invented figures. Mock data remains available only
+ * for an intentionally unconfigured local demo.
  */
 import { ObjectId } from "mongodb";
 import type {
@@ -58,15 +60,10 @@ function escapeRegex(q: string) {
   return q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Run a live query, falling back to mock data on any failure. */
+/** Run a live query. Never replace failed production data with demo rows. */
 async function live<T>(fallback: () => T, query: () => Promise<T>): Promise<T> {
   if (!isMongoConfigured()) return fallback();
-  try {
-    return await query();
-  } catch (error) {
-    console.error("[management-api] falling back to mock:", (error as Error).message);
-    return fallback();
-  }
+  return query();
 }
 
 /* ── status → derived academic fields ──────────────────────────

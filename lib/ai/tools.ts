@@ -145,6 +145,90 @@ export const toolDefinitions = [
   {
     type: "function" as const,
     function: {
+      name: "analyze_fee_payments",
+      description:
+        "Read-only fee-invoice analysis from the real payments collection. Use for fees collected, paid/pending invoices, monthly fee ratio, invoice types, and transaction totals. This is student fee data only; NEVER use it for donations. Returns raw status values as stored plus a clearly labelled paid-like normalization.",
+      parameters: {
+        type: "object",
+        properties: {
+          group_by: { type: "string", enum: ["month", "status", "type"], description: "Primary grouping. Use month for month-wise collection." },
+          billing_month: { type: "string", description: "Optional YYMM value stored in payments, for example 2607 for July 2026." },
+          type: { type: "string", description: "Optional exact invoice type, e.g. monthly, registration, certificate." },
+        },
+        required: ["group_by"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "analyze_donations",
+      description:
+        "Read-only fundraising analysis from the real donations collection. Use for top donors, donation totals, and donation trends. Donations do not contain bank-account or payment-transaction fields; say that plainly instead of inventing them.",
+      parameters: {
+        type: "object",
+        properties: {
+          group_by: { type: "string", enum: ["month", "donor", "campaign"], description: "Primary grouping." },
+          month: { type: "string", description: "Optional calendar month in YYYY-MM, e.g. 2026-07." },
+        },
+        required: ["group_by"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "analyze_attendance",
+      description:
+        "Read-only check-in analysis. Student check-ins come from attendances; trainer check-ins/check-outs come from trainer_attendances. Use for attendance counts, statuses, and monthly check-in trends. It does not invent attendance percentages.",
+      parameters: {
+        type: "object",
+        properties: {
+          subject: { type: "string", enum: ["student", "trainer"], description: "Whose attendance to inspect." },
+          group_by: { type: "string", enum: ["month", "status"], description: "Primary grouping." },
+          month: { type: "string", description: "Optional calendar month in YYYY-MM." },
+        },
+        required: ["subject", "group_by"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "analyze_academic_records",
+      description:
+        "Read-only analysis of results, certificates, or assignment submissions. Use for counts and status/month breakdowns. Scores are returned only for result records where a real score exists.",
+      parameters: {
+        type: "object",
+        properties: {
+          record_type: { type: "string", enum: ["results", "certificates", "assignment_submissions"] },
+          group_by: { type: "string", enum: ["month", "status"], description: "Primary grouping." },
+          month: { type: "string", description: "Optional calendar month in YYYY-MM." },
+        },
+        required: ["record_type", "group_by"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "search_audit_logs",
+      description:
+        "ADMIN ONLY: read recent database audit logs to answer who changed what and when. Returns only stored log fields; it never guesses an action or actor.",
+      parameters: {
+        type: "object",
+        properties: {
+          model: { type: "string", description: "Optional exact model/collection name to filter, e.g. students." },
+          action: { type: "string", description: "Optional exact action to filter." },
+          limit: { type: "number", description: "Number of most recent logs, 1 to 50." },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "generate_word_report",
       description:
         "Generate a downloadable Word (.docx) document and return a download link. Use this whenever the user asks for a document, file, export, printable report, or says things like 'give me a word file', 'bana ke do', 'ek document banao', 'export this'. ALWAYS call your list_* / get_org_stats tools FIRST to fetch the real data, then pass the exact rows here — never invent rows. Keep columns short and focused on what was asked (e.g. Name, Roll No / Email, Age, Campus).",
@@ -374,6 +458,24 @@ function matchByName<T extends { id: string; name?: string; title?: string }>(
 
 const err = (message: string) => JSON.stringify({ error: message });
 const argStr = (args: Record<string, unknown>, key: string) => String(args[key] ?? "").trim();
+
+/** Every reporting tool returns provenance so factual answers are auditable. */
+function evidence(collections: string[], filters: Record<string, unknown>) {
+  return {
+    source_collections: collections,
+    applied_filters: filters,
+    generated_at: new Date().toISOString(),
+  };
+}
+
+/** MongoDB payment months are stored as YYMM; expose a human-readable label. */
+function paymentMonthLabel(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  if (!/^\d{4}$/.test(raw)) return raw || "(not set)";
+  const year = 2000 + Number(raw.slice(0, 2));
+  const month = Number(raw.slice(2));
+  return month >= 1 && month <= 12 ? `${year}-${String(month).padStart(2, "0")}` : raw;
+}
 
 interface StudentRow {
   /** The student_induction _id (our "student" row is really an enrolment). */
@@ -756,6 +858,206 @@ export async function executeTool(
         showing_first: rows.length,
         note: `Sample of ${rows.length} out of ${total.toLocaleString()} placed students.`,
         rows,
+      });
+    }
+
+    case "analyze_fee_payments": {
+      if (ctx.role !== "admin") return err("Permission denied: fee reports are visible to admins only.");
+      const groupBy = argStr(args, "group_by");
+      if (!["month", "status", "type"].includes(groupBy)) return err("group_by must be month, status, or type.");
+      const match: Record<string, unknown> = {};
+      const billingMonth = argStr(args, "billing_month");
+      const type = argStr(args, "type");
+      if (billingMonth) match.billing_month = billingMonth;
+      if (type) match.type = type;
+      const groupField = groupBy === "month" ? "$billing_month" : groupBy === "status" ? "$status" : "$type";
+      const [report] = await db.collection("payments").aggregate([
+        ...(Object.keys(match).length ? [{ $match: match }] : []),
+        {
+          $set: {
+            invoice_amount: { $convert: { input: "$amount", to: "double", onError: 0, onNull: 0 } },
+            transaction_amount_value: { $convert: { input: "$transaction_amount", to: "double", onError: 0, onNull: 0 } },
+            raw_status: { $ifNull: ["$status", "(not set)"] },
+          },
+        },
+        { $set: { paid_like: { $regexMatch: { input: { $toLower: "$raw_status" }, regex: "^pa" } } } },
+        {
+          $facet: {
+            rows: [
+              {
+                $group: {
+                  _id: groupField,
+                  invoices: { $sum: 1 },
+                  invoiced_amount_pkr: { $sum: "$invoice_amount" },
+                  paid_like_invoices: { $sum: { $cond: ["$paid_like", 1, 0] } },
+                  paid_like_invoice_amount_pkr: { $sum: { $cond: ["$paid_like", "$invoice_amount", 0] } },
+                  recorded_transaction_amount_pkr: { $sum: "$transaction_amount_value" },
+                },
+              },
+              { $sort: { invoiced_amount_pkr: -1 } },
+            ],
+            raw_statuses: [{ $group: { _id: "$raw_status", invoices: { $sum: 1 } } }, { $sort: { invoices: -1 } }],
+          },
+        },
+      ]).toArray();
+      interface FeeRow {
+        [groupBy: string]: string | number;
+        invoices: number;
+        invoiced_amount_pkr: number;
+        paid_like_invoices: number;
+        paid_like_invoice_amount_pkr: number;
+        recorded_transaction_amount_pkr: number;
+      }
+      const rows: FeeRow[] = ((report?.rows ?? []) as Array<Record<string, unknown>>).map((r) => ({
+        [groupBy]: groupBy === "month" ? paymentMonthLabel(r._id) : String(r._id ?? "(not set)"),
+        invoices: Number(r.invoices ?? 0),
+        invoiced_amount_pkr: Number(r.invoiced_amount_pkr ?? 0),
+        paid_like_invoices: Number(r.paid_like_invoices ?? 0),
+        paid_like_invoice_amount_pkr: Number(r.paid_like_invoice_amount_pkr ?? 0),
+        recorded_transaction_amount_pkr: Number(r.recorded_transaction_amount_pkr ?? 0),
+      }));
+      return JSON.stringify({
+        evidence: evidence(["payments"], match),
+        paid_like_rule: "Raw payment status beginning with 'pa' after lowercasing (raw status breakdown is included).",
+        totals: rows.reduce<{ invoices: number; invoiced_amount_pkr: number; paid_like_invoices: number; paid_like_invoice_amount_pkr: number; recorded_transaction_amount_pkr: number }>(
+          (sum, row) => ({
+            invoices: sum.invoices + row.invoices,
+            invoiced_amount_pkr: sum.invoiced_amount_pkr + row.invoiced_amount_pkr,
+            paid_like_invoices: sum.paid_like_invoices + row.paid_like_invoices,
+            paid_like_invoice_amount_pkr: sum.paid_like_invoice_amount_pkr + row.paid_like_invoice_amount_pkr,
+            recorded_transaction_amount_pkr: sum.recorded_transaction_amount_pkr + row.recorded_transaction_amount_pkr,
+          }),
+          { invoices: 0, invoiced_amount_pkr: 0, paid_like_invoices: 0, paid_like_invoice_amount_pkr: 0, recorded_transaction_amount_pkr: 0 },
+        ),
+        raw_status_breakdown: ((report?.raw_statuses ?? []) as Array<Record<string, unknown>>).map((r) => ({ status: String(r._id), invoices: Number(r.invoices ?? 0) })),
+        rows,
+      });
+    }
+
+    case "analyze_donations": {
+      if (ctx.role !== "admin") return err("Permission denied: donation reports are visible to admins only.");
+      const groupBy = argStr(args, "group_by");
+      if (!["month", "donor", "campaign"].includes(groupBy)) return err("group_by must be month, donor, or campaign.");
+      const match: Record<string, unknown> = {};
+      const month = argStr(args, "month");
+      if (month) {
+        if (!/^\d{4}-\d{2}$/.test(month)) return err("month must use YYYY-MM, for example 2026-07.");
+        const start = new Date(`${month}-01T00:00:00.000Z`);
+        const end = new Date(start);
+        end.setUTCMonth(end.getUTCMonth() + 1);
+        match.created_at_date = { $gte: start, $lt: end };
+      }
+      const groupField = groupBy === "month"
+        ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } }
+        : groupBy === "donor" ? "$donorName" : "$campaignId";
+      const rows = await db.collection("donations").aggregate([
+        { $set: { created_at_date: { $convert: { input: "$createdAt", to: "date", onError: null, onNull: null } } } },
+        ...(Object.keys(match).length ? [{ $match: match }] : []),
+        { $set: { amount_value: { $convert: { input: "$amount", to: "double", onError: 0, onNull: 0 } } } },
+        { $group: { _id: groupBy === "month" ? { $dateToString: { format: "%Y-%m", date: "$created_at_date" } } : groupField, donations: { $sum: 1 }, amount_pkr: { $sum: "$amount_value" } } },
+        { $sort: { amount_pkr: -1 } },
+        { $limit: 100 },
+      ]).toArray();
+      const campaignIds = rows.map((r) => String(r._id ?? "")).filter(Boolean);
+      const campaigns = campaignIds.length
+        ? await db.collection("campaigns").find({ $or: [{ _id: { $in: campaignIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id)) } }, { id: { $in: campaignIds } }] }).project({ id: 1, title: 1 }).toArray()
+        : [];
+      const campaignNames = Object.fromEntries(campaigns.flatMap((c) => [[String(c._id), String(c.title ?? c.id ?? c._id)], [String(c.id ?? ""), String(c.title ?? c.id ?? c._id)]]));
+      const output = rows.map((r) => ({
+        [groupBy]: groupBy === "campaign" ? (campaignNames[String(r._id)] ?? String(r._id ?? "(not set)")) : String(r._id ?? "(not set)"),
+        donations: Number(r.donations ?? 0),
+        amount_pkr: Number(r.amount_pkr ?? 0),
+      }));
+      return JSON.stringify({
+        evidence: evidence(["donations", "campaigns"], match),
+        note: "The donations collection has no bank-account or payment-transaction fields.",
+        total_donations: output.reduce((sum, row) => sum + row.donations, 0),
+        total_amount_pkr: output.reduce((sum, row) => sum + row.amount_pkr, 0),
+        rows: output,
+      });
+    }
+
+    case "analyze_attendance": {
+      const subject = argStr(args, "subject");
+      const groupBy = argStr(args, "group_by");
+      if (subject !== "student" && subject !== "trainer") return err("subject must be student or trainer.");
+      if (groupBy !== "month" && groupBy !== "status") return err("group_by must be month or status.");
+      const collection = subject === "student" ? "attendances" : "trainer_attendances";
+      const match: Record<string, unknown> = {};
+      const month = argStr(args, "month");
+      if (month) {
+        if (!/^\d{4}-\d{2}$/.test(month)) return err("month must use YYYY-MM, for example 2026-07.");
+        const start = new Date(`${month}-01T00:00:00.000Z`);
+        const end = new Date(start);
+        end.setUTCMonth(end.getUTCMonth() + 1);
+        match.createdAt = { $gte: start, $lt: end };
+      }
+      if (ctx.role === "trainer") {
+        if (subject === "trainer") match.trainer = idEq(trainer!.id);
+        else {
+          const inductions = await db.collection("student_inductions").find({ trainer: idEq(trainer!.id) }).project({ _id: 1 }).toArray();
+          match.student_induction = { $in: inductions.map((d) => d._id) };
+        }
+      }
+      const groupField = groupBy === "month" ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } } : "$status";
+      const rows = await db.collection(collection).aggregate([
+        ...(Object.keys(match).length ? [{ $match: match }] : []),
+        { $group: { _id: groupField, check_ins: { $sum: 1 }, average_minutes: { $avg: { $convert: { input: "$minutes", to: "double", onError: null, onNull: null } } } } },
+        { $sort: { check_ins: -1 } },
+        { $limit: 100 },
+      ]).toArray();
+      return JSON.stringify({
+        evidence: evidence([collection], match),
+        subject,
+        rows: rows.map((r) => ({ [groupBy]: String(r._id ?? "(not set)"), check_ins: Number(r.check_ins ?? 0), ...(subject === "trainer" ? { average_minutes: Math.round(Number(r.average_minutes ?? 0)) } : {}) })),
+      });
+    }
+
+    case "analyze_academic_records": {
+      const collection = argStr(args, "record_type");
+      const groupBy = argStr(args, "group_by");
+      if (!["results", "certificates", "assignment_submissions"].includes(collection)) return err("record_type must be results, certificates, or assignment_submissions.");
+      if (groupBy !== "month" && groupBy !== "status") return err("group_by must be month or status.");
+      const match: Record<string, unknown> = {};
+      const month = argStr(args, "month");
+      if (month) {
+        if (!/^\d{4}-\d{2}$/.test(month)) return err("month must use YYYY-MM, for example 2026-07.");
+        const start = new Date(`${month}-01T00:00:00.000Z`);
+        const end = new Date(start);
+        end.setUTCMonth(end.getUTCMonth() + 1);
+        match.createdAt = { $gte: start, $lt: end };
+      }
+      if (ctx.role === "trainer") {
+        const inductions = await db.collection("student_inductions").find({ trainer: idEq(trainer!.id) }).project({ _id: 1 }).toArray();
+        match.student_induction = { $in: inductions.map((d) => d._id) };
+      }
+      const groupField = groupBy === "month" ? { $dateToString: { format: "%Y-%m", date: "$createdAt" } } : "$status";
+      const rows = await db.collection(collection).aggregate([
+        ...(Object.keys(match).length ? [{ $match: match }] : []),
+        { $group: { _id: groupField, records: { $sum: 1 }, average_score: { $avg: { $convert: { input: "$score", to: "double", onError: null, onNull: null } } } } },
+        { $sort: { records: -1 } },
+        { $limit: 100 },
+      ]).toArray();
+      return JSON.stringify({
+        evidence: evidence([collection], match),
+        record_type: collection,
+        rows: rows.map((r) => ({ [groupBy]: String(r._id ?? "(not set)"), records: Number(r.records ?? 0), ...(collection === "results" ? { average_score: Number(r.average_score ?? 0) } : {}) })),
+      });
+    }
+
+    case "search_audit_logs": {
+      if (ctx.role !== "admin") return err("Permission denied: audit logs are visible to admins only.");
+      const match: Record<string, unknown> = {};
+      const model = argStr(args, "model");
+      const action = argStr(args, "action");
+      if (model) match.model = model;
+      if (action) match.action = action;
+      const requestedLimit = Number(args.limit ?? 20);
+      const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(Math.floor(requestedLimit), 1), 50) : 20;
+      const rows = await db.collection("logs").find(match).sort({ createdAt: -1 }).limit(limit).project({ action: 1, action_by: 1, model: 1, method: 1, route: 1, doc_id: 1, createdAt: 1, changed_fields: 1 }).toArray();
+      return JSON.stringify({
+        evidence: evidence(["logs"], match),
+        rows: rows.map((r) => ({ action: r.action ?? null, action_by: r.action_by ?? null, model: r.model ?? null, method: r.method ?? null, route: r.route ?? null, record_id: r.doc_id ? String(r.doc_id) : null, changed_fields: r.changed_fields ?? null, created_at: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt ?? null })),
       });
     }
 

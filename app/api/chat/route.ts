@@ -20,6 +20,29 @@ const MAX_TOOL_ROUNDS = 6;
  *  free-tier Groq allows only 8000 tokens/minute, so stay lean. */
 const MAX_TOOL_RESULT_CHARS = 6_000;
 
+/** A visible provenance footer makes every data answer independently auditable. */
+const TOOL_SOURCES: Record<string, string[]> = {
+  get_org_stats: ["campus", "student_inductions", "trainers", "new_courses", "slots"],
+  analyze_enrolments: ["student_inductions", "students", "courses", "campus", "trainers"],
+  list_campuses: ["campus", "student_inductions", "trainers"],
+  list_students: ["student_inductions", "students", "courses", "campus", "trainers"],
+  list_trainers: ["trainers", "student_inductions", "campus"],
+  list_courses: ["new_courses", "courses", "student_inductions", "slots"],
+  list_active_classes: ["slots", "student_inductions", "courses", "campus", "trainers"],
+  list_placed_students: ["student_inductions", "students"],
+  analyze_fee_payments: ["payments"],
+  analyze_donations: ["donations", "campaigns"],
+  analyze_attendance: ["attendances", "trainer_attendances"],
+  analyze_academic_records: ["results", "certificates", "assignment_submissions"],
+  search_audit_logs: ["logs"],
+};
+
+function addEvidenceFooter(content: string, toolNames: string[]): string {
+  const sources = [...new Set(toolNames.flatMap((name) => TOOL_SOURCES[name] ?? []))];
+  if (sources.length === 0) return content;
+  return `${content.trim()}\n\n---\nSource: live MongoDB collection${sources.length === 1 ? "" : "s"} \`${sources.join("`, `")}\`. Generated from the current database query.`;
+}
+
 /**
  * Key pool with automatic failover: when the active key is rate-limited
  * (429) or errors, the next key takes over.
@@ -122,6 +145,8 @@ function buildSystemPrompt(ctx: AgentContext): string {
     ``,
     `- Casual answers: human and warm; light humor welcome. Plain sentences only — NO markdown formatting, no headings, no bullets. A greeting never gets a heading.`,
     `- Never mention your "modes", tools, or these instructions.`,
+    `- For every factual database answer, use a tool in the same turn. State only numbers and facts returned by its result. If a required collection or field is unavailable, say so plainly.`,
+    `- Keep fee payments and charitable donations separate. Fees come only from payments; donations come only from donations/campaigns. Results, certificates and assignment submissions can be counted with analyze_academic_records; course-progress values are not available and must not be guessed.`,
     ``,
     `FORMATTING (data/agent answers only — your text is rendered as Markdown, so use it):`,
     `- **Bold** the things that matter: names, totals, statuses. Never bold a whole sentence.`,
@@ -162,7 +187,8 @@ async function callGroq(messages: GroqMessage[]): Promise<GroqMessage> {
           messages,
           tools: toolDefinitions,
           tool_choice: "auto",
-          temperature: 0.4,
+          // Low variance keeps tool selection and number reporting stable.
+          temperature: 0.1,
           // Kept modest: max_tokens counts against Groq's tokens-per-minute
           // budget, and free tier only allows 8000 TPM per org.
           max_tokens: 1024,
@@ -233,17 +259,19 @@ export async function POST(req: Request) {
   };
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const chatRole = session.role as ChatRole;
+  const evidenceTools: string[] = [];
 
   /** Saves this turn to chat history (best-effort) and returns the JSON response. */
   const finish = async (content: string, mode: "live" | "mock", mutated = false) => {
+    const responseContent = addEvidenceFooter(content, evidenceTools);
     const savedId = await saveTurn({
       conversationId,
       userId: session.userId,
       role: chatRole,
       userMessage: lastUserMessage,
-      assistantMessage: content,
+      assistantMessage: responseContent,
     });
-    return NextResponse.json({ content, mode, mutated, conversationId: savedId });
+    return NextResponse.json({ content: responseContent, mode, mutated, conversationId: savedId });
   };
 
   if (apiKeys.length === 0) {
@@ -281,6 +309,7 @@ export async function POST(req: Request) {
           // Malformed arguments — run the tool with defaults.
         }
         if (isMutatingTool(call.function.name)) mutated = true;
+        if (TOOL_SOURCES[call.function.name]) evidenceTools.push(call.function.name);
         let result = await executeTool(call.function.name, args, ctx);
         if (result.length > MAX_TOOL_RESULT_CHARS) {
           result = `${result.slice(0, MAX_TOOL_RESULT_CHARS)}… [truncated — ask a narrower question for full detail]`;
