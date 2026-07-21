@@ -216,6 +216,7 @@ export default async function AdminDashboardPage() {
             primaryColor={TREND_GREEN}
             secondaryColor={TREND_RED}
             format="number"
+            smooth
           />
         </ChartCard>
       </div>

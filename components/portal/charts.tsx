@@ -61,6 +61,28 @@ function barPath(x: number, y: number, w: number, h: number, round: boolean) {
   return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
 }
 
+/** Turns a straight-segment polyline into a smooth wave — a Catmull-Rom
+ *  spline converted to cubic Bezier segments, so each point is still hit
+ *  exactly (no data is smoothed away) but the line between them curves
+ *  instead of kinking. Used for the "wave" trend charts. */
+function smoothPath(points: Array<{ x: number; y: number }>): string {
+  if (points.length < 2) return points.length === 1 ? `M${points[0].x},${points[0].y}` : "";
+  const p = points;
+  let d = `M${p[0].x},${p[0].y}`;
+  for (let i = 0; i < p.length - 1; i++) {
+    const p0 = p[i === 0 ? 0 : i - 1];
+    const p1 = p[i];
+    const p2 = p[i + 1];
+    const p3 = p[i + 2 < p.length ? i + 2 : p.length - 1];
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y}`;
+  }
+  return d;
+}
+
 /** Rough glyph width for this app's 11px sans body text — used only to
  *  decide how many characters of an axis label fit in a given band, never
  *  for exact layout. */
@@ -537,6 +559,10 @@ export function MultiTrendArea({
   primaryColor = SERIES_1,
   secondaryColor = SERIES_2,
   format = "number",
+  /** Draws both series as a smooth wave instead of straight segments. Every
+   *  real data point is still hit exactly — only the line between points
+   *  curves. */
+  smooth = false,
 }: {
   data: Array<{ label: string; fullLabel: string; primary: number; secondary: number }>;
   primaryLabel: string;
@@ -544,6 +570,7 @@ export function MultiTrendArea({
   primaryColor?: string;
   secondaryColor?: string;
   format?: ValueFormat;
+  smooth?: boolean;
 }) {
   const formatValue = (v: number) => fmt(v, format);
   const [ref, width] = useWidth<HTMLDivElement>();
@@ -566,8 +593,10 @@ export function MultiTrendArea({
   const xOf = (i: number) => (data.length === 1 ? PAD_L + plotW / 2 : PAD_L + (i / (data.length - 1)) * plotW);
   const yOf = (v: number) => PAD_T + PLOT_H - (v / maxTick) * PLOT_H;
 
-  const lineOf = (key: "primary" | "secondary") =>
-    data.map((d, i) => `${i === 0 ? "M" : "L"}${xOf(i)},${yOf(d[key])}`).join(" ");
+  const lineOf = (key: "primary" | "secondary") => {
+    const points = data.map((d, i) => ({ x: xOf(i), y: yOf(d[key]) }));
+    return smooth ? smoothPath(points) : points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  };
   const primaryLine = lineOf("primary");
   const secondaryLine = lineOf("secondary");
   const primaryArea = data.length
