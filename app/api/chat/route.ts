@@ -37,8 +37,19 @@ const TOOL_SOURCES: Record<string, string[]> = {
   search_audit_logs: ["logs"],
 };
 
-function addEvidenceFooter(content: string, toolNames: string[]): string {
-  const sources = [...new Set(toolNames.flatMap((name) => TOOL_SOURCES[name] ?? []))];
+/** Which collections a tool call actually read. Fixed for the purpose-built
+ *  tools; for query_collection it's whatever collection the model asked for,
+ *  so the footer stays truthful as the agent roams the wider schema. */
+function sourcesFor(toolName: string, args: Record<string, unknown>): string[] {
+  if (toolName === "query_collection") {
+    const c = String(args.collection ?? "").trim();
+    return c ? [c] : [];
+  }
+  return TOOL_SOURCES[toolName] ?? [];
+}
+
+function addEvidenceFooter(content: string, collections: string[]): string {
+  const sources = [...new Set(collections)];
   if (sources.length === 0) return content;
   return `${content.trim()}\n\n---\nSource: live MongoDB collection${sources.length === 1 ? "" : "s"} \`${sources.join("`, `")}\`. Generated from the current database query.`;
 }
@@ -120,19 +131,14 @@ function buildSystemPrompt(ctx: AgentContext): string {
     `- If a tool returns an empty list or nothing matches, say that plainly (e.g. "Good news — no student is below that threshold"). NEVER fabricate entries.`,
     `- If a question needs data from multiple tools (e.g. comparing campuses AND trainers), call all the tools you need before answering.`,
     ``,
-    `DATABASE MAP — this is how the real data is actually shaped. Trust it over any assumption:`,
-    `- \`student_inductions\` is the HUB: ONE ROW PER STUDENT ENROLMENT (not per person — a student who enrols twice has two rows). It holds the enrolment status, the dates, and the foreign keys to everything else (student_id, course, new_course, slot, trainer, campus).`,
-    `- Almost every "how many students … by …" question is a grouping of that hub — answer those with analyze_enrolments, NOT by listing students and counting by hand.`,
-    `- Enrolment status real values: enrolled, pending, passed, completed, dropout, rejected, blacklisted. There are no other values.`,
-    `- DROPOUTS ARE TRACKED: student_inductions carries dropout_date, dropout_reason and dropout_type. So "dropouts by month / by course" IS answerable — call analyze_enrolments with status='dropout' and date_field='dropout_date'. Note only records that actually dropped out carry a dropout_date.`,
-    `- Personal details live in \`students\`: full_name, email, gender, student_cnic, date_of_birth, contact_number, father_name, full_address, last_qualification. Age IS derivable from date_of_birth.`,
-    `- roll_number and batch_number live on the ENROLMENT (student_inductions), not on the person.`,
-    `- Names are stored nested and bilingual — courses.en.course_name, campus.en.campus_name, trainers.en.trainer_name. Your tools already resolve these to plain names: always report the NAME, never an id like "652c0e40…".`,
-    `- Attendance is two separate things: \`attendances\` = student class check-ins; \`trainer_attendances\` = trainer check-in/check-out with minutes and lateness.`,
-    `- Money is two separate things that must NEVER be mixed: \`payments\` = student tuition fee invoices (billing_month, paid/pending). \`donations\` / \`campaigns\` / \`public_donors\` = the charity/fundraising side.`,
-    `- A course exists twice: \`courses\` is the catalog (the subject), \`new_courses\` is a specific offering/batch of it. \`slots\` are the actual class sections with capacity, booked seats, timing and a trainer.`,
-    `- GENUINELY NOT IN THE DATABASE — never estimate these, say plainly they aren't tracked: job placements/employers/salaries, per-student course-progress %, per-student attendance %.`,
-    `- Quizzes, assignments, results, certificates and course progress DO exist as data but you have NO tool for them yet — if asked, say you can't retrieve those rather than guessing.`,
+    `DATABASE — you can reach all 53 collections. Only the essentials are below; call describe_schema for anything else (no arguments lists every collection, a collection name gives its fields, joins and traps). Never guess a field name — look it up.`,
+    `- \`student_inductions\` is the HUB: ONE ROW PER ENROLMENT, not per person (a student who enrols twice has two rows). It holds the status, the dates, and the foreign keys to everything else.`,
+    `- Almost every "how many students … by …" question is a grouping of that hub — use analyze_enrolments, NOT a hand count of listed students.`,
+    `- Enrolment status real values: enrolled, pending, passed, completed, dropout, rejected, blacklisted. There are no others.`,
+    `- Names are nested and bilingual (courses.en.course_name, campus.en.campus_name, trainers.en.trainer_name). Always report the NAME, never an id like "652c0e40…".`,
+    `- NEVER mix the two money domains: \`payments\` = student tuition invoices; \`donations\`/\`campaigns\` = charity fundraising.`,
+    `- For collections without a dedicated tool (quizzes, results, assignments, scholarships, ratings, events, jobs, course modules …): describe_schema first, then query_collection.`,
+    `- GENUINELY NOT TRACKED anywhere — say so plainly, never estimate: which student got which job, employers, salaries, per-student course-progress %, per-student attendance %. The \`jobs\` collection is vacancies advertised, NOT placements.`,
     ``,
     `DOCUMENTS: if the user EXPLICITLY asks for a document, file, "word file", report, export, printout, or says "bana ke do" / "ek file de do" — skip the confirmation below and go straight to fetching data + generate_word_report.`,
     ``,
@@ -199,7 +205,19 @@ async function callGroq(messages: GroqMessage[]): Promise<GroqMessage> {
         // Stick with whichever key is currently working.
         lastGoodKeyIndex = keyIndex;
         const data = await res.json();
-        return data.choices[0].message as GroqMessage;
+        const raw = data.choices[0].message as GroqMessage & Record<string, unknown>;
+        // gpt-oss-120b returns a `reasoning` field alongside the reply. Kept
+        // on the message, it goes back up with the next request — and every
+        // other model in the chain rejects it with a 400, so the fallback
+        // that exists to survive a rate limit could never actually run.
+        // Only the fields the API defines travel onward.
+        const { role, content, tool_calls, tool_call_id } = raw;
+        return {
+          role,
+          content: content ?? null,
+          ...(tool_calls ? { tool_calls } : {}),
+          ...(tool_call_id ? { tool_call_id } : {}),
+        };
       }
 
       const body = await res.text();
@@ -259,11 +277,11 @@ export async function POST(req: Request) {
   };
   const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const chatRole = session.role as ChatRole;
-  const evidenceTools: string[] = [];
+  const evidenceCollections: string[] = [];
 
   /** Saves this turn to chat history (best-effort) and returns the JSON response. */
   const finish = async (content: string, mode: "live" | "mock", mutated = false) => {
-    const responseContent = addEvidenceFooter(content, evidenceTools);
+    const responseContent = addEvidenceFooter(content, evidenceCollections);
     const savedId = await saveTurn({
       conversationId,
       userId: session.userId,
@@ -309,7 +327,7 @@ export async function POST(req: Request) {
           // Malformed arguments — run the tool with defaults.
         }
         if (isMutatingTool(call.function.name)) mutated = true;
-        if (TOOL_SOURCES[call.function.name]) evidenceTools.push(call.function.name);
+        evidenceCollections.push(...sourcesFor(call.function.name, args));
         let result = await executeTool(call.function.name, args, ctx);
         if (result.length > MAX_TOOL_RESULT_CHARS) {
           result = `${result.slice(0, MAX_TOOL_RESULT_CHARS)}… [truncated — ask a narrower question for full detail]`;

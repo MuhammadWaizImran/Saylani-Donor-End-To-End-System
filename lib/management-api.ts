@@ -899,7 +899,11 @@ export function getTrainer(idOrEmail: string): Promise<Trainer | undefined> {
     () => mock.getTrainer(idOrEmail),
     async () => {
       const all = await loadTrainers();
-      return all.find((t) => t.id === idOrEmail || t.email.toLowerCase() === idOrEmail.toLowerCase());
+      // Not every trainer record carries an email — matching on it
+      // unguarded threw and took the whole request down with it.
+      const needle = (idOrEmail ?? "").toLowerCase();
+      if (!needle) return undefined;
+      return all.find((t) => t.id === idOrEmail || (t.email ?? "").toLowerCase() === needle);
     },
   );
 }

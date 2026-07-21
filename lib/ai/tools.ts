@@ -20,6 +20,15 @@ import {
   searchTrainers,
 } from "@/lib/management-api";
 import { buildWordReport, uploadWordReport } from "@/lib/ai/report";
+import {
+  ALL_COLLECTIONS,
+  DOMAIN_LABELS,
+  SCHEMA,
+  findCollection,
+  redact,
+  type CollectionInfo,
+  type Domain,
+} from "@/lib/ai/schema-map";
 import { mongo } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 
@@ -32,6 +41,66 @@ const rx = (q: string) => q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const statusFromEnrollment = (v: string) => (v === "active" ? "enrolled" : "completed");
 
 export const toolDefinitions = [
+  /* ── schema discovery + generic query ───────────────────── */
+  {
+    type: "function" as const,
+    function: {
+      name: "describe_schema",
+      description:
+        "Look up the real database structure. Call with no arguments to list all 53 collections grouped by domain (core, lms, attendance, fees, charity, engagement, careers, system). Call with a collection name to get that collection's purpose, every field and what it means, how it joins to other collections, and the traps that would otherwise give a wrong answer. USE THIS FIRST whenever a question touches data you don't already have a dedicated tool for — it tells you exactly which collection and field to query.",
+      parameters: {
+        type: "object",
+        properties: {
+          // Both are optional, and models routinely fill an omitted optional
+          // with an explicit null — which Groq's own tool-call validator
+          // rejects against a bare "string" type before the call ever
+          // reaches us. Accepting null is what keeps that from 400-ing.
+          collection: {
+            type: ["string", "null"],
+            description: "Exact collection name, e.g. quizzes, results, scholarships. Omit to list everything.",
+          },
+          domain: {
+            type: ["string", "null"],
+            enum: ["core", "lms", "attendance", "fees", "charity", "engagement", "careers", "system", null],
+            description: "Optionally list only one domain's collections.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "query_collection",
+      description:
+        "Read-only query against ANY collection in the database — this is how you reach the ones without a dedicated tool (quizzes, questions, results, assignments, scholarships, ratings, events, jobs, course modules, and the rest). Call describe_schema first to learn the field names, then use them here. Either count/group rows (group_by) or fetch rows (no group_by). Password and session fields are never returned.",
+      parameters: {
+        type: "object",
+        properties: {
+          collection: { type: "string", description: "Exact collection name — see describe_schema." },
+          // Every optional field accepts null: models fill omitted optionals
+          // with an explicit null, and Groq 400s that against a bare type.
+          filter: {
+            type: ["object", "null"],
+            description:
+              "Optional equality filters as {field: value}, e.g. {\"status\": \"approved\"}. 24-character hex strings are matched as ids automatically. Use dotted paths for nested fields, e.g. \"en.course_name\".",
+            additionalProperties: true,
+          },
+          group_by: {
+            type: ["string", "null"],
+            description:
+              "Optional field to group and count by. Use \"__month\" to group by month of createdAt. Omit to return rows instead of counts.",
+          },
+          sum_field: { type: ["string", "null"], description: "Optional numeric field to total within each group." },
+          sort_by: { type: ["string", "null"], description: "Optional field to sort rows by (rows mode only)." },
+          sort_dir: { type: ["string", "null"], enum: ["asc", "desc", null], description: "Sort direction. Default desc." },
+          limit: { type: ["number", "null"], description: "Max rows/groups to return, 1-50. Default 20." },
+        },
+        required: ["collection"],
+      },
+    },
+  },
   /* ── read tools ─────────────────────────────────────────── */
   {
     type: "function" as const,
@@ -565,6 +634,170 @@ export async function executeTool(
   }
 
   switch (name) {
+    /* ── schema discovery ───────────────────────────────── */
+    case "describe_schema": {
+      const wanted = argStr(args, "collection");
+      const domain = argStr(args, "domain") as Domain;
+
+      if (wanted) {
+        const found = findCollection(wanted);
+        if (!found) {
+          return err(
+            `No collection named "${wanted}". Call describe_schema with no arguments to see the ${ALL_COLLECTIONS.length} that exist.`,
+          );
+        }
+        return JSON.stringify({
+          collection: wanted,
+          domain: found.domain,
+          purpose: found.info.purpose,
+          approx_documents: found.info.approxDocs,
+          fields: found.info.fields,
+          ...(found.info.relations ? { relations: found.info.relations } : {}),
+          ...(found.info.gotchas ? { gotchas: found.info.gotchas } : {}),
+          how_to_query: `query_collection with collection="${wanted}"`,
+        });
+      }
+
+      /* Three levels, each deliberately small. Groq's free tier caps a whole
+         request at 8,000 tokens, and this result is re-sent on every
+         subsequent round of the same conversation — so a listing that
+         described all 53 collections at once (~1,300 tokens) pushed real
+         requests over the limit on its own. Names first, prose only when
+         asked for. */
+      if (domain && SCHEMA[domain]) {
+        return JSON.stringify({
+          domain,
+          about: DOMAIN_LABELS[domain],
+          collections: Object.fromEntries(
+            Object.entries(SCHEMA[domain]).map(([n, i]) => [n, `${i.purpose} (~${i.approxDocs} docs)`]),
+          ),
+          next: "describe_schema with a collection name gives its fields, joins and gotchas.",
+        });
+      }
+
+      return JSON.stringify({
+        total_collections: ALL_COLLECTIONS.length,
+        note: "Names only. Call describe_schema with domain=<name> for what each does, or collection=<name> for full fields, joins and gotchas.",
+        domains: Object.fromEntries(
+          (Object.entries(SCHEMA) as Array<[Domain, Record<string, CollectionInfo>]>).map(([d, group]) => [
+            d,
+            { about: DOMAIN_LABELS[d], collections: Object.keys(group) },
+          ]),
+        ),
+      });
+    }
+
+    case "query_collection": {
+      const collection = argStr(args, "collection");
+      const found = findCollection(collection);
+      // Validating against the schema map is what stops an arbitrary
+      // collection name reaching the driver — the map IS the allow-list.
+      if (!found) {
+        return err(
+          `No collection named "${collection}". Call describe_schema with no arguments to see what exists.`,
+        );
+      }
+      if (found.info.approxDocs === 0) {
+        return JSON.stringify({ collection, rows: [], note: "This collection is empty." });
+      }
+
+      /* Admin-only domains. These hold staff accounts, privilege structure,
+         the audit trail and the fundraising ledger — none of it traceable to
+         a trainer's own students, so the per-trainer scoping below cannot
+         narrow them and they would otherwise come back whole. Matches the
+         existing gates on search_audit_logs and analyze_donations. */
+      if (ctx.role !== "admin" && (found.domain === "system" || found.domain === "charity")) {
+        return err(`Permission denied: ${collection} is visible to admins only.`);
+      }
+
+      const limit = Math.min(50, Math.max(1, Number(args.limit ?? 20) || 20));
+      const groupBy = argStr(args, "group_by");
+      const sumField = argStr(args, "sum_field");
+
+      /* Equality filters only. A 24-char hex value is matched as either an
+         ObjectId or the same string, since this database stores foreign keys
+         both ways depending on which service wrote the row. */
+      const match: Record<string, unknown> = {};
+      const rawFilter = (typeof args.filter === "object" && args.filter ? args.filter : {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(rawFilter)) {
+        if (k.startsWith("$")) return err(`Filter field "${k}" is not allowed — use plain field names.`);
+        match[k] = typeof v === "string" && /^[a-f0-9]{24}$/i.test(v) ? idEq(v) : v;
+      }
+
+      /* Trainers stay scoped to their own students wherever the collection
+         can be traced back to an enrolment they teach. */
+      if (ctx.role === "trainer" && trainer) {
+        const traceable = ["student_induction", "trainer", "slot"];
+        const key = traceable.find((f) => f in found.info.fields);
+        if (key === "trainer") {
+          match.trainer = idEq(trainer.id);
+        } else if (key) {
+          const mine = await db
+            .collection("student_inductions")
+            .find({ trainer: idEq(trainer.id) })
+            .project({ _id: 1, slot: 1 })
+            .toArray();
+          match[key] =
+            key === "slot"
+              ? { $in: mine.map((d) => d.slot).filter(Boolean) }
+              : { $in: mine.map((d) => d._id) };
+        } else if (collection === "students" || collection === "student_inductions") {
+          match._id = { $in: [] }; // handled by the dedicated student tools
+          return err("Use list_students — it already scopes students to you.");
+        }
+      }
+
+      if (groupBy) {
+        const groupField =
+          groupBy === "__month"
+            ? { $dateToString: { format: "%Y-%m", date: { $toDate: "$createdAt" } } }
+            : `$${groupBy}`;
+        const rows = await db
+          .collection(collection)
+          .aggregate([
+            ...(Object.keys(match).length ? [{ $match: match }] : []),
+            {
+              $group: {
+                _id: groupField,
+                count: { $sum: 1 },
+                ...(sumField
+                  ? { total: { $sum: { $convert: { input: `$${sumField}`, to: "double", onError: 0, onNull: 0 } } } }
+                  : {}),
+              },
+            },
+            { $sort: groupBy === "__month" ? { _id: 1 } : { count: -1 } },
+            { $limit: limit },
+          ])
+          .toArray();
+        return JSON.stringify({
+          evidence: evidence([collection], match),
+          grouped_by: groupBy,
+          rows: rows.map((r) => ({
+            [groupBy]: r._id === null || r._id === undefined ? "(not set)" : String(r._id),
+            count: Number(r.count ?? 0),
+            ...(sumField ? { [`total_${sumField}`]: Number(r.total ?? 0) } : {}),
+          })),
+        });
+      }
+
+      const sortBy = argStr(args, "sort_by");
+      const sortDir = argStr(args, "sort_dir") === "asc" ? 1 : -1;
+      const rows = await db
+        .collection(collection)
+        .find(match)
+        .sort(sortBy ? { [sortBy]: sortDir } : { _id: -1 })
+        .limit(limit)
+        .toArray();
+      const total = await db.collection(collection).countDocuments(match);
+      return JSON.stringify({
+        evidence: evidence([collection], match),
+        matched: total,
+        returned: rows.length,
+        ...(total > rows.length ? { note: `Showing ${rows.length} of ${total}. Narrow the filter for the rest.` } : {}),
+        rows: redact(rows),
+      });
+    }
+
     /* ── reads ──────────────────────────────────────────── */
     case "get_org_stats": {
       // Only the counts that are genuinely backed by the database. OrgStats
