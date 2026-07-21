@@ -23,7 +23,10 @@ import { buildWordReport, uploadWordReport } from "@/lib/ai/report";
 import {
   ALL_COLLECTIONS,
   DOMAIN_LABELS,
+  INDEXES,
+  RELATIONS,
   SCHEMA,
+  UNIVERSAL_FIELDS,
   findCollection,
   redact,
   type CollectionInfo,
@@ -47,7 +50,7 @@ export const toolDefinitions = [
     function: {
       name: "describe_schema",
       description:
-        "Look up the real database structure. Call with no arguments to list all 53 collections grouped by domain (core, lms, attendance, fees, charity, engagement, careers, system). Call with a collection name to get that collection's purpose, every field and what it means, how it joins to other collections, and the traps that would otherwise give a wrong answer. USE THIS FIRST whenever a question touches data you don't already have a dedicated tool for — it tells you exactly which collection and field to query.",
+        "The real database structure. No arguments lists all 53 collections; a collection name gives its purpose, every field's meaning, its joins, and the REAL values each status/type field holds. USE THIS BEFORE filtering on any field you have not already looked up — a guessed value returns nothing and looks exactly like a true zero.",
       parameters: {
         type: "object",
         properties: {
@@ -74,7 +77,7 @@ export const toolDefinitions = [
     function: {
       name: "query_collection",
       description:
-        "Read-only query against ANY collection in the database — this is how you reach the ones without a dedicated tool (quizzes, questions, results, assignments, scholarships, ratings, events, jobs, course modules, and the rest). Call describe_schema first to learn the field names, then use them here. Either count/group rows (group_by) or fetch rows (no group_by). Password and session fields are never returned.",
+        "Read-only query against ANY collection — how you reach the ones with no dedicated tool (quizzes, results, assignments, scholarships, ratings, events, jobs …). Call describe_schema FIRST for the real field names and values. group_by counts; omit it to fetch rows.",
       parameters: {
         type: "object",
         properties: {
@@ -84,18 +87,17 @@ export const toolDefinitions = [
           filter: {
             type: ["object", "null"],
             description:
-              "Optional equality filters as {field: value}, e.g. {\"status\": \"approved\"}. 24-character hex strings are matched as ids automatically. Use dotted paths for nested fields, e.g. \"en.course_name\".",
+              "Equality filters {field: value}. Dotted paths work for nested fields (\"en.course_name\"); 24-char hex is matched as an id.",
             additionalProperties: true,
           },
           group_by: {
             type: ["string", "null"],
-            description:
-              "Optional field to group and count by. Use \"__month\" to group by month of createdAt. Omit to return rows instead of counts.",
+            description: "Field to group and count by. \"__month\" groups by month of createdAt.",
           },
-          sum_field: { type: ["string", "null"], description: "Optional numeric field to total within each group." },
-          sort_by: { type: ["string", "null"], description: "Optional field to sort rows by (rows mode only)." },
-          sort_dir: { type: ["string", "null"], enum: ["asc", "desc", null], description: "Sort direction. Default desc." },
-          limit: { type: ["number", "null"], description: "Max rows/groups to return, 1-50. Default 20." },
+          sum_field: { type: ["string", "null"], description: "Numeric field to total per group." },
+          sort_by: { type: ["string", "null"], description: "Field to sort rows by." },
+          sort_dir: { type: ["string", "null"], enum: ["asc", "desc", null], description: "Default desc." },
+          limit: { type: ["number", "null"], description: "1-50, default 20." },
         },
         required: ["collection"],
       },
@@ -116,7 +118,7 @@ export const toolDefinitions = [
     function: {
       name: "analyze_enrolments",
       description:
-        "THE tool for counting/grouping enrolments — use it for any 'how many X by Y' question about students. Groups the student_inductions records (one row per student enrolment) by up to two dimensions, with optional filters. Answers questions like: dropouts per course per month, enrolments per campus, passed students per course, status breakdown per trainer. Returns real counts with resolved names — never estimate these yourself.",
+        "THE tool for any 'how many students by X' question. Groups student_inductions (one row per enrolment) by up to two dimensions with optional filters, returning real counts with resolved names.",
       parameters: {
         type: "object",
         properties: {
@@ -140,8 +142,7 @@ export const toolDefinitions = [
           date_field: {
             type: "string",
             enum: ["dropout_date", "enrollment_date", "createdAt"],
-            description:
-              "Which date drives month grouping. Use dropout_date when the question is about dropouts, enrollment_date for when students joined, createdAt (default) for when the record was made.",
+            description: "Which date drives month grouping. Default createdAt.",
           },
         },
         required: ["group_by"],
@@ -646,13 +647,19 @@ export async function executeTool(
             `No collection named "${wanted}". Call describe_schema with no arguments to see the ${ALL_COLLECTIONS.length} that exist.`,
           );
         }
+        // Relations and indexes are merged from their own maps rather than
+        // repeated on all 53 entries. Indexes matter for query planning: an
+        // indexed filter is a lookup, an unindexed one scans the collection.
+        const relations = [...(RELATIONS[wanted] ?? []), ...(found.info.relations ?? [])];
+        const indexes = INDEXES[wanted];
         return JSON.stringify({
           collection: wanted,
           domain: found.domain,
           purpose: found.info.purpose,
           approx_documents: found.info.approxDocs,
-          fields: found.info.fields,
-          ...(found.info.relations ? { relations: found.info.relations } : {}),
+          fields: { ...found.info.fields, ...UNIVERSAL_FIELDS },
+          ...(relations.length ? { relations } : {}),
+          indexes: indexes ?? "None beyond _id — any filter here scans the whole collection. Fine at this size, but prefer an indexed field when one exists.",
           ...(found.info.gotchas ? { gotchas: found.info.gotchas } : {}),
           how_to_query: `query_collection with collection="${wanted}"`,
         });

@@ -14,6 +14,93 @@
  * Everything here was verified against the live database, not assumed.
  */
 
+/**
+ * Nearly every collection carries these, so documenting them 53 times would
+ * just be noise the agent pays for on every lookup. describe_schema folds
+ * them in instead.
+ */
+export const UNIVERSAL_FIELDS: Record<string, string> = {
+  _id: "Primary key. Usually an ObjectId; `campaigns`, `donations` and `public_donors` use plain STRINGS instead.",
+  createdAt: "When the row was created — this is the date to group by for any 'per month' question unless a more specific date field exists.",
+  updatedAt: "When the row was last modified.",
+};
+
+/**
+ * The indexes that actually exist, read off the live database. The agent uses
+ * these to pick a filter that the database can answer quickly: filtering on an
+ * indexed field is a lookup, filtering on anything else is a full scan of the
+ * collection. Anything not listed here is unindexed.
+ */
+export const INDEXES: Record<string, string[]> = {
+  agent_conversations: ["userId + updatedAt"],
+  attendances: ["student_id"],
+  campus: ["city"],
+  donations: ["createdAt"],
+  new_courses: ["status", "campus", "course"],
+  payments: ["student", "status"],
+  portal_donors: ["email"],
+  revoked_sessions: ["jti", "expiresAt"],
+  slots: ["trainer", "campus", "new_course"],
+  student_inductions: [
+    "campus",
+    "trainer",
+    "new_course",
+    "course",
+    "status",
+    "student_id",
+    "campus + status (compound — best for 'status breakdown of one campus')",
+  ],
+  trainer_attendances: ["trainer", "status"],
+  trainers: ["campus", "email"],
+  users: ["email"],
+};
+
+/**
+ * Which collections point at which. Written as a directed list so the agent
+ * can plan a join in either direction without guessing a field name.
+ */
+export const RELATIONS: Record<string, string[]> = {
+  attendances: ["student_induction → student_inductions", "student_id → students", "slot → slots"],
+  campus: ["city → cities"],
+  certificates: ["student_induction → student_inductions"],
+  cities: ["country → countries"],
+  classes: ["slot → slots"],
+  course_modules: ["course → courses"],
+  course_progresses: ["course → courses", "course_module → course_modules", "course_topic → course_topics", "slot → slots"],
+  course_syllabuses: ["module → course_modules", "course → courses"],
+  course_topics: ["course → courses", "course_module → course_modules"],
+  assignments: ["slot → slots", "trainer → trainers", "new_course → new_courses"],
+  assignment_submissions: [
+    "assignment → assignments",
+    "student_induction → student_inductions",
+    "NO campus field — reach campus via student_induction → student_inductions.campus",
+  ],
+  donations: ["campaignId → campaigns.id (a STRING id, not an ObjectId)"],
+  donors: ["campuses[] → campus"],
+  events: ["course → courses", "campus → campus"],
+  feedbacks: ["student_induction → student_inductions", "trainer → trainers"],
+  logs: ["action_by → users", "doc_id → the record named by the `model` field"],
+  new_courses: ["course → courses", "campuses[] → campus (ARRAY)", "city → cities"],
+  online_classes: ["slot → slots"],
+  payments: ["student → students", "student_induction → student_inductions"],
+  points: ["student_induction → student_inductions", "slot → slots"],
+  student_points: ["student_induction → student_inductions", "slot → slots"],
+  questions: ["quiz → quizzes"],
+  quiz_schedules: ["quiz → quizzes", "slot → slots", "question_ids[] → questions"],
+  quizzes: ["courses[] → courses (ARRAY)", "course_module → course_modules"],
+  ratings: ["student_induction → student_inductions", "slot → slots"],
+  results: ["quiz → quizzes", "student_induction → student_inductions", "slot → slots"],
+  roles: ["permissions[] → permissions"],
+  scholarships: ["student → students", "student_induction → student_inductions"],
+  slots: ["new_course → new_courses", "campus → campus", "trainer → trainers"],
+  success_stories: ["slot → slots"],
+  trainer_attendances: ["trainer → trainers", "slot → slots"],
+  trainer_attendance_requests: ["attendance → trainer_attendances", "created_by / action_by → users"],
+  trainers: ["campus[] → campus (ARRAY)", "courses[] → courses (ARRAY)", "city[] → cities (ARRAY)", "country → countries"],
+  users: ["campus[] → campus (ARRAY)", "city[] → cities (ARRAY)", "country → countries"],
+  ambassadors: ["campus → campus", "new_course → new_courses"],
+};
+
 export interface CollectionInfo {
   /** What this collection is for, in one line. */
   purpose: string;
@@ -89,6 +176,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         student_id: "→ students._id (the person)",
         campus: "→ campus._id",
         city: "→ cities._id",
+        country: "→ countries._id",
         course: "→ courses._id (the subject)",
         new_course: "→ new_courses._id (the specific batch/offering)",
         slot: "→ slots._id (the class section)",
@@ -151,6 +239,8 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         "en.description": "Description",
         show_on_website: "Public visibility flag",
         course_slug: "URL slug",
+        sequence: "Display order",
+        cover_image: "Cover image URL",
       },
       gotchas: [
         "Some course names carry stray tab characters — trim before displaying.",
@@ -170,6 +260,8 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         type: 'Only "COURSE" is present (uppercase).',
         category: "Nested {en, ur}",
         is_online: "Whether it runs online",
+        fees: "Course fee for this offering",
+        sub_category: "Nested {en, ur}",
         instruction: "Array of instruction notes",
       },
       gotchas: ["`campuses` is an ARRAY, and `status` is a BOOLEAN here (not a string)."],
@@ -219,10 +311,12 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         hourly_rate: "Pay rate in PKR per HOUR (never per month)",
         campus: "ARRAY of → campus._id",
         courses: "ARRAY of → courses._id",
-        course: "→ courses._id (older single-course field)",
+        course: "→ courses._id (older single-course field — check both)",
         city: "ARRAY of → cities._id",
         phone_number: "Contact",
         employee_id: "Staff number",
+        is_deleted: "SOFT DELETE flag. Rows with is_deleted true are removed staff — exclude them from any head-count or you will over-report trainers.",
+        country: "→ countries._id",
         description: "Bio",
         social_links: "Array of {name, url}",
       },
@@ -247,6 +341,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         attempts_allowed: "How many tries a student gets",
         is_active: "Whether it's live",
         courses: "ARRAY of → courses._id",
+        course: "ARRAY of → courses._id — an older duplicate of `courses`. Both exist on real rows, so check both before concluding a quiz has no course.",
         course_module: "→ course_modules._id",
         tags: "Array of tags",
       },
@@ -388,6 +483,8 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         start_time: "Start",
         end_time: "End",
         status: "started | ended",
+        host_id: "Meeting host id",
+        start_url: "Host start link",
       },
       gotchas: ["Signature fields are redacted — they are credentials, not data."],
     },
@@ -452,6 +549,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         format_amount: "Pre-formatted display amount",
         billing_month: "YYMM string, e.g. '2607' = July 2026",
         due_date: "Due date",
+        due_date_student: "Due date as shown to the student",
         status: 'DIRTY DATA: real values are "paid", "pending", "paida" and "pa\naid" (a typo and a stray newline). Treat any value starting with "pa" as paid — never match "paid" exactly or you will undercount.',
         type: "monthly | registration | certificate",
         transaction_amount: "Amount actually transacted",
@@ -491,6 +589,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         isAnonymous: "Whether to hide the donor's name",
         message: "Donor's message",
         createdAt: "ISO date STRING, not a Date object",
+        id: "String id (this collection uses string keys, not ObjectId)",
       },
       gotchas: [
         "_id and createdAt are STRINGS here, not ObjectId/Date — this collection came from a different system.",
@@ -508,10 +607,13 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         goalAmount: "Target amount",
         raisedAmount: "Raised so far",
         donorCount: "Number of donors",
+        id: "String id — this is what donations.campaignId points at, NOT _id",
         category: "Education | Healthcare | Food Relief | Clean Water | Emergency | Orphan Care",
         location: "Where it applies",
         status: "active | urgent | completed",
         endsAt: "End date",
+        slug: "URL slug",
+        currency: "Currency code",
       },
       gotchas: ["_id is a STRING here, not an ObjectId."],
     },
@@ -525,6 +627,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         totalDonated: "Lifetime total",
         donationCount: "How many donations",
         memberSince: "Join date",
+        id: "String id (this collection uses string keys, not ObjectId)",
       },
     },
     donors: {
@@ -563,7 +666,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
     student_points: {
       purpose: "Same shape as `points` — a near-duplicate collection with 1 record.",
       approxDocs: 1,
-      fields: { point: "Points", type: "Type", student_induction: "→ student_inductions._id", slot: "→ slots._id" },
+      fields: { point: "Points", type: "Type", student_induction: "→ student_inductions._id", slot: "→ slots._id", document: "→ the record the points relate to" },
       gotchas: ["Almost empty. `points` is the one actually in use."],
     },
     ratings: {
@@ -592,6 +695,8 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         os: "Operating system",
         is_mobile: "Mobile or not",
         images: "Attached screenshots",
+        ua: "Raw user-agent string",
+        platform: "Client platform",
       },
     },
     success_stories: {
@@ -622,6 +727,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         campus: "→ campus._id",
         new_course: "→ new_courses._id",
         qualification: "Education",
+        cnic: "National ID number",
         gender: "Gender",
         bio: "Bio",
         status: "active | pending",
@@ -708,6 +814,7 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
         campus: "ARRAY of → campus._id they administer",
         city: "ARRAY of → cities._id",
         isSuperAdmin: "Super-admin flag",
+        country: "→ countries._id",
         is_dev: "Developer account flag",
         permissions: "Nested permission object",
       },
@@ -758,7 +865,12 @@ export const SCHEMA: Record<Domain, Record<string, CollectionInfo>> = {
     counters: {
       purpose: "Internal auto-increment counters (roll numbers etc.).",
       approxDocs: 2,
-      fields: { name: "Counter name", seq: "Current value" },
+      fields: {
+        name: "Counter name",
+        seq: "Current value",
+        id: "Counter key",
+        reference_value: "Optional value this counter is scoped to",
+      },
     },
     agendaJobs: {
       purpose: "Background job queue used by the training system.",
