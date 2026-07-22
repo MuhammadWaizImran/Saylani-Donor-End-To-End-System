@@ -27,12 +27,18 @@ interface Provider {
   headers?: Record<string, string>;
 }
 
-const openRouterKeys = [process.env.OPENROUTER_API_KEY, process.env.OPENROUTER_API_KEY_2].filter(
-  (k): k is string => Boolean(k && k.trim()),
-);
-const groqKeys = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2].filter(
-  (k): k is string => Boolean(k && k.trim()),
-);
+/** Collects a numbered key series from the environment: NAME, NAME_2, NAME_3,
+ *  NAME_4. Free OpenRouter accounts each carry their own small daily
+ *  allowance, so several keys stacked here multiply the free budget before
+ *  anything falls through to Groq. */
+function collectKeys(base: string): string[] {
+  return [process.env[base], process.env[`${base}_2`], process.env[`${base}_3`], process.env[`${base}_4`]]
+    .filter((k): k is string => Boolean(k && k.trim()))
+    .map((k) => k.trim());
+}
+
+const openRouterKeys = collectKeys("OPENROUTER_API_KEY");
+const groqKeys = collectKeys("GROQ_API_KEY");
 
 const PROVIDERS: Provider[] = [
   ...(openRouterKeys.length
@@ -279,69 +285,79 @@ async function callModel(messages: GroqMessage[]): Promise<GroqMessage> {
 
   for (const provider of PROVIDERS) {
     for (const model of provider.models) {
-      // Two passes over this provider's key pool: transient errors
-      // (tool_use_failed, brief 429s) usually succeed on a retry.
-      const maxAttempts = provider.keys.length * 2;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const keyIndex = attempt % provider.keys.length;
-        const res = await fetch(provider.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${provider.keys[keyIndex]}`,
-            ...provider.headers,
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            tools: toolDefinitions,
-            tool_choice: "auto",
-            // Low variance keeps tool selection and number reporting stable.
-            temperature: 0.1,
-            max_tokens: provider.maxTokens,
-            ...(provider.reasoningEffort ? { reasoning_effort: provider.reasoningEffort } : {}),
-          }),
-        });
+      // Walk every key in turn. A key that's out of its (free) daily budget
+      // returns 402 — when that happens we move to the NEXT key, so all of a
+      // provider's keys are exhausted before control falls to the next
+      // provider (Groq). One transient retry per key covers brief 429s and
+      // tool_use_failed hiccups without holding up the failover.
+      let modelUnavailable = false;
+      for (let keyIndex = 0; keyIndex < provider.keys.length && !modelUnavailable; keyIndex++) {
+        for (let tries = 0; tries < 2; tries++) {
+          const res = await fetch(provider.url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${provider.keys[keyIndex]}`,
+              ...provider.headers,
+            },
+            body: JSON.stringify({
+              model,
+              messages,
+              tools: toolDefinitions,
+              tool_choice: "auto",
+              // Low variance keeps tool selection and number reporting stable.
+              temperature: 0.1,
+              max_tokens: provider.maxTokens,
+              ...(provider.reasoningEffort ? { reasoning_effort: provider.reasoningEffort } : {}),
+            }),
+          });
 
-        if (res.ok) {
-          const data = await res.json();
-          const raw = data.choices?.[0]?.message as (GroqMessage & Record<string, unknown>) | undefined;
-          if (!raw) {
-            lastError = new Error(`${provider.name} ${model}: empty choices`);
-            console.warn(`[api/chat] ${lastError.message}`);
-            continue;
+          if (res.ok) {
+            const data = await res.json();
+            const raw = data.choices?.[0]?.message as (GroqMessage & Record<string, unknown>) | undefined;
+            if (!raw) {
+              lastError = new Error(`${provider.name} ${model}: empty choices`);
+              console.warn(`[api/chat] ${lastError.message}`);
+              break; // next key
+            }
+            // Reasoning models (gpt-oss, gpt-5.6-sol) return a `reasoning`
+            // field alongside the reply. Kept on the message it rides back up
+            // with the next request, and other providers reject it with a 400
+            // — which is exactly what broke the fallback before. Only the
+            // defined fields travel onward.
+            const { role, content, tool_calls, tool_call_id } = raw;
+            return {
+              role,
+              content: content ?? null,
+              ...(tool_calls ? { tool_calls } : {}),
+              ...(tool_call_id ? { tool_call_id } : {}),
+            };
           }
-          // Reasoning models (gpt-oss, gpt-5.6-sol) return a `reasoning` field
-          // alongside the reply. Kept on the message it rides back up with the
-          // next request, and other providers reject it with a 400 — which is
-          // exactly what broke the fallback before. Only the defined fields
-          // travel onward.
-          const { role, content, tool_calls, tool_call_id } = raw;
-          return {
-            role,
-            content: content ?? null,
-            ...(tool_calls ? { tool_calls } : {}),
-            ...(tool_call_id ? { tool_call_id } : {}),
-          };
-        }
 
-        const body = await res.text();
-        lastError = new Error(`${provider.name} ${model} key #${keyIndex + 1} → ${res.status}: ${body.slice(0, 200)}`);
-        console.warn(`[api/chat] ${lastError.message}`);
+          const body = await res.text();
+          lastError = new Error(`${provider.name} ${model} key #${keyIndex + 1} → ${res.status}: ${body.slice(0, 200)}`);
+          console.warn(`[api/chat] ${lastError.message}`);
 
-        // Model gone, or account out of credits (402) → stop hammering this
-        // provider/model and let the next one (Groq) take over.
-        if (res.status === 404 || res.status === 402 || (res.status === 400 && /model/i.test(body) && !body.includes("tool_use_failed"))) {
-          break;
-        }
-        const transientToolFailure = res.status === 400 && body.includes("tool_use_failed");
-        if (!RETRYABLE_STATUSES.has(res.status) && !transientToolFailure) break;
-        if (res.status === 429) {
-          // Honor the provider's own "try again in Ns" hint (capped) so the
-          // retry lands inside the window instead of guessing.
-          const hint = body.match(/try again in ([\d.]+)(m?s)/i);
-          const waitMs = hint ? Number(hint[1]) * (hint[2].toLowerCase() === "ms" ? 1 : 1000) : 1500;
-          await sleep(Math.min(Math.max(waitMs + 300, 800), 8000));
+          // Model itself not available here (gone/decommissioned) → no other
+          // key will help, so abandon this provider entirely.
+          if (res.status === 404 || (res.status === 400 && /model/i.test(body) && !body.includes("tool_use_failed"))) {
+            modelUnavailable = true;
+            break;
+          }
+          // This KEY is out of credit/allowance, unauthorized, or forbidden →
+          // no point retrying it; move straight to the next key.
+          if (res.status === 402 || res.status === 401 || res.status === 403) break;
+
+          const transientToolFailure = res.status === 400 && body.includes("tool_use_failed");
+          if (!RETRYABLE_STATUSES.has(res.status) && !transientToolFailure) break; // next key
+          if (res.status === 429) {
+            // Honor the provider's own "try again in Ns" hint (capped) so the
+            // retry lands inside the window instead of guessing.
+            const hint = body.match(/try again in ([\d.]+)(m?s)/i);
+            const waitMs = hint ? Number(hint[1]) * (hint[2].toLowerCase() === "ms" ? 1 : 1000) : 1500;
+            await sleep(Math.min(Math.max(waitMs + 300, 800), 8000));
+          }
+          // fall through to the second try for this key
         }
       }
     }
