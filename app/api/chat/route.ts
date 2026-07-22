@@ -4,20 +4,74 @@ import { executeTool, toolDefinitions } from "@/lib/ai/tools";
 import { getSessionUser } from "@/lib/auth-server";
 import { saveTurn } from "@/lib/ai/chat-store";
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 /**
- * Model fallback chain — first entry that works wins. gpt-oss-120b is
- * markedly better at multi-step tool calling than llama-3.3-70b, so it
- * leads; llama stays as the safety net.
+ * Providers are tried in order, first working one wins. OpenRouter leads with
+ * gpt-5.6-sol: a far stronger tool-caller than gpt-oss and a 1M-token context,
+ * so it isn't throttled the way Groq's free tier is (8k tokens/minute). Groq
+ * stays as the fallback — if OpenRouter is unconfigured, out of credits, or
+ * down, the assistant keeps working on Groq rather than going dark.
+ *
+ * Each provider carries its own keys, models and per-request tuning, because
+ * a reasoning model (gpt-5.6-sol) spends completion tokens on its own thinking
+ * and needs a larger max_tokens than a plain chat model, or the answer gets
+ * truncated before it starts.
  */
-const MODEL_CHAIN = [
-  ...(process.env.GROQ_MODEL ? [process.env.GROQ_MODEL] : []),
-  "openai/gpt-oss-120b",
-  "llama-3.3-70b-versatile",
-].filter((m, i, arr) => arr.indexOf(m) === i);
+interface Provider {
+  name: string;
+  url: string;
+  keys: string[];
+  models: string[];
+  maxTokens: number;
+  /** OpenRouter reasoning models accept this to keep thinking (and cost/latency) in check. */
+  reasoningEffort?: "low" | "medium" | "high";
+  headers?: Record<string, string>;
+}
+
+const openRouterKeys = [process.env.OPENROUTER_API_KEY, process.env.OPENROUTER_API_KEY_2].filter(
+  (k): k is string => Boolean(k && k.trim()),
+);
+const groqKeys = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2].filter(
+  (k): k is string => Boolean(k && k.trim()),
+);
+
+const PROVIDERS: Provider[] = [
+  ...(openRouterKeys.length
+    ? [
+        {
+          name: "openrouter",
+          url: "https://openrouter.ai/api/v1/chat/completions",
+          keys: openRouterKeys,
+          models: [process.env.OPENROUTER_MODEL || "openai/gpt-5.6-sol"],
+          maxTokens: 2500,
+          reasoningEffort: "low" as const,
+          // Optional attribution headers OpenRouter uses for its dashboards;
+          // harmless if omitted, so no secret or required value lives here.
+          headers: {
+            "HTTP-Referer": "https://saylani-donor-end-to-end-system.vercel.app",
+            "X-Title": "Saylani Intelligence",
+          },
+        },
+      ]
+    : []),
+  ...(groqKeys.length
+    ? [
+        {
+          name: "groq",
+          url: "https://api.groq.com/openai/v1/chat/completions",
+          keys: groqKeys,
+          models: [
+            ...(process.env.GROQ_MODEL ? [process.env.GROQ_MODEL] : []),
+            "openai/gpt-oss-120b",
+            "llama-3.3-70b-versatile",
+          ].filter((m, i, arr) => arr.indexOf(m) === i),
+          maxTokens: 1024,
+        },
+      ]
+    : []),
+];
+
 const MAX_TOOL_ROUNDS = 6;
-/** Cap a single tool result so one big table can't blow the token budget —
- *  free-tier Groq allows only 8000 tokens/minute, so stay lean. */
+/** Cap a single tool result so one big table can't blow a tight token budget. */
 const MAX_TOOL_RESULT_CHARS = 6_000;
 
 /** A visible provenance footer makes every data answer independently auditable. */
@@ -102,23 +156,8 @@ function addEvidenceFooter(content: string, collections: string[]): string {
   return `${content.trim()}\n\n---\nSource: live MongoDB collection${sources.length === 1 ? "" : "s"} \`${sources.join("`, `")}\`. Generated from the current database query.`;
 }
 
-/**
- * Key pool with automatic failover: when the active key is rate-limited
- * (429) or errors, the next key takes over.
- *
- * `lastGoodKeyIndex` is a best-effort HINT, not synchronized state — on
- * Fluid Compute a warm instance can interleave concurrent requests, so two
- * requests can race to read/write it. That's fine: it only decides which key
- * an attempt tries FIRST, every request still validates its own response and
- * retries the rest of the pool on failure regardless of what this value is.
- * Nothing here is ever correct-or-incorrect based on its value, so it never
- * needs a lock — it just saves the common case a wasted attempt against a
- * key already known to be rate-limited.
- */
-const apiKeys = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2].filter(
-  (k): k is string => Boolean(k && k.trim()),
-);
-let lastGoodKeyIndex = 0;
+/** True when at least one provider has keys — i.e. the agent can run live. */
+const hasAnyProvider = PROVIDERS.length > 0;
 
 const RETRYABLE_STATUSES = new Set([401, 403, 429, 500, 502, 503]);
 
@@ -229,75 +268,85 @@ function buildSystemPrompt(ctx: AgentContext): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function callGroq(messages: GroqMessage[]): Promise<GroqMessage> {
+/**
+ * Calls the model, walking every provider → model → key in order until one
+ * answers. All the providers here speak the OpenAI chat-completions shape, so
+ * the request body is nearly identical; only the URL, keys, model list and a
+ * couple of tuning fields differ (see PROVIDERS).
+ */
+async function callModel(messages: GroqMessage[]): Promise<GroqMessage> {
   let lastError: Error | null = null;
 
-  for (const model of MODEL_CHAIN) {
-    // Two passes over the key pool per model: transient errors
-    // (tool_use_failed, brief 429s) usually succeed on a retry.
-    const maxAttempts = apiKeys.length * 2;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const keyIndex = (lastGoodKeyIndex + attempt) % apiKeys.length;
-      const res = await fetch(GROQ_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKeys[keyIndex]}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          tools: toolDefinitions,
-          tool_choice: "auto",
-          // Low variance keeps tool selection and number reporting stable.
-          temperature: 0.1,
-          // Kept modest: max_tokens counts against Groq's tokens-per-minute
-          // budget, and free tier only allows 8000 TPM per org.
-          max_tokens: 1024,
-        }),
-      });
+  for (const provider of PROVIDERS) {
+    for (const model of provider.models) {
+      // Two passes over this provider's key pool: transient errors
+      // (tool_use_failed, brief 429s) usually succeed on a retry.
+      const maxAttempts = provider.keys.length * 2;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const keyIndex = attempt % provider.keys.length;
+        const res = await fetch(provider.url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${provider.keys[keyIndex]}`,
+            ...provider.headers,
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            tools: toolDefinitions,
+            tool_choice: "auto",
+            // Low variance keeps tool selection and number reporting stable.
+            temperature: 0.1,
+            max_tokens: provider.maxTokens,
+            ...(provider.reasoningEffort ? { reasoning_effort: provider.reasoningEffort } : {}),
+          }),
+        });
 
-      if (res.ok) {
-        // Stick with whichever key is currently working.
-        lastGoodKeyIndex = keyIndex;
-        const data = await res.json();
-        const raw = data.choices[0].message as GroqMessage & Record<string, unknown>;
-        // gpt-oss-120b returns a `reasoning` field alongside the reply. Kept
-        // on the message, it goes back up with the next request — and every
-        // other model in the chain rejects it with a 400, so the fallback
-        // that exists to survive a rate limit could never actually run.
-        // Only the fields the API defines travel onward.
-        const { role, content, tool_calls, tool_call_id } = raw;
-        return {
-          role,
-          content: content ?? null,
-          ...(tool_calls ? { tool_calls } : {}),
-          ...(tool_call_id ? { tool_call_id } : {}),
-        };
-      }
+        if (res.ok) {
+          const data = await res.json();
+          const raw = data.choices?.[0]?.message as (GroqMessage & Record<string, unknown>) | undefined;
+          if (!raw) {
+            lastError = new Error(`${provider.name} ${model}: empty choices`);
+            console.warn(`[api/chat] ${lastError.message}`);
+            continue;
+          }
+          // Reasoning models (gpt-oss, gpt-5.6-sol) return a `reasoning` field
+          // alongside the reply. Kept on the message it rides back up with the
+          // next request, and other providers reject it with a 400 — which is
+          // exactly what broke the fallback before. Only the defined fields
+          // travel onward.
+          const { role, content, tool_calls, tool_call_id } = raw;
+          return {
+            role,
+            content: content ?? null,
+            ...(tool_calls ? { tool_calls } : {}),
+            ...(tool_call_id ? { tool_call_id } : {}),
+          };
+        }
 
-      const body = await res.text();
-      lastError = new Error(
-        `Groq ${model} key #${keyIndex + 1} → ${res.status}: ${body.slice(0, 200)}`,
-      );
-      console.warn(`[api/chat] ${lastError.message}`);
+        const body = await res.text();
+        lastError = new Error(`${provider.name} ${model} key #${keyIndex + 1} → ${res.status}: ${body.slice(0, 200)}`);
+        console.warn(`[api/chat] ${lastError.message}`);
 
-      // Model itself is bad/decommissioned for this account → next model.
-      if (res.status === 404 || (res.status === 400 && /model/i.test(body) && !body.includes("tool_use_failed"))) {
-        break;
-      }
-      const transientToolFailure = res.status === 400 && body.includes("tool_use_failed");
-      if (!RETRYABLE_STATUSES.has(res.status) && !transientToolFailure) throw lastError;
-      if (res.status === 429) {
-        // Groq tells us how long to wait ("Please try again in 4.2s" /
-        // "in 240ms") — honor it (capped) so the retry lands in the window.
-        const hint = body.match(/try again in ([\d.]+)(m?s)/i);
-        const waitMs = hint ? Number(hint[1]) * (hint[2].toLowerCase() === "ms" ? 1 : 1000) : 1500;
-        await sleep(Math.min(Math.max(waitMs + 300, 800), 8000));
+        // Model gone, or account out of credits (402) → stop hammering this
+        // provider/model and let the next one (Groq) take over.
+        if (res.status === 404 || res.status === 402 || (res.status === 400 && /model/i.test(body) && !body.includes("tool_use_failed"))) {
+          break;
+        }
+        const transientToolFailure = res.status === 400 && body.includes("tool_use_failed");
+        if (!RETRYABLE_STATUSES.has(res.status) && !transientToolFailure) break;
+        if (res.status === 429) {
+          // Honor the provider's own "try again in Ns" hint (capped) so the
+          // retry lands inside the window instead of guessing.
+          const hint = body.match(/try again in ([\d.]+)(m?s)/i);
+          const waitMs = hint ? Number(hint[1]) * (hint[2].toLowerCase() === "ms" ? 1 : 1000) : 1500;
+          await sleep(Math.min(Math.max(waitMs + 300, 800), 8000));
+        }
       }
     }
   }
-  throw lastError ?? new Error("No Groq API keys configured");
+  throw lastError ?? new Error("No AI providers configured");
 }
 
 export async function POST(req: Request) {
@@ -348,7 +397,7 @@ export async function POST(req: Request) {
   /** Runs the agent loop, calling `emit` as each step happens. Returns the
    *  final answer. `emit` is a no-op for the JSON path. */
   const run = async (emit: (e: StepEvent) => void): Promise<Result> => {
-    if (apiKeys.length === 0) return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false };
+    if (!hasAnyProvider) return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false };
 
     try {
       const thread: GroqMessage[] = [
@@ -360,7 +409,7 @@ export async function POST(req: Request) {
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         emit({ type: "step", label: round === 0 ? "Thinking…" : "Working through the data…" });
-        const reply = await callGroq(thread);
+        const reply = await callModel(thread);
 
         if (!reply.tool_calls || reply.tool_calls.length === 0) {
           return {
