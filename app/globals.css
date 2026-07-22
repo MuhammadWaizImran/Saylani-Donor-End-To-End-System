@@ -84,6 +84,41 @@
   }
 }
 
+/* The live "thinking" line sweeps a highlight across the text so the wait
+ * reads as active work. Falls back to plain colour if the browser can't do
+ * background-clip: text, and stops entirely under reduced-motion. */
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--color-ink-muted) 0%,
+    var(--color-ink-muted) 35%,
+    var(--color-ink-strong) 50%,
+    var(--color-ink-muted) 65%,
+    var(--color-ink-muted) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-sweep 1.8s linear infinite;
+}
+
+@keyframes shimmer-sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
 :root {
   color-scheme: light;
 

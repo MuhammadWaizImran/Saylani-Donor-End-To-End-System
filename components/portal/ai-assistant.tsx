@@ -10,7 +10,9 @@ import {
   ArrowUp,
   Bot,
   Check,
+  ChevronRight,
   Copy,
+  Database,
   Download,
   FileText,
   History,
@@ -28,6 +30,7 @@ import {
   listConversations,
   loadConversation,
   type AgentMode,
+  type AgentStep,
   type ChatMessage,
   type ConversationSummary,
 } from "@/lib/ai/agent";
@@ -63,12 +66,92 @@ const timeFormatter = new Intl.DateTimeFormat("en", { hour: "numeric", minute: "
  *  the latest assistant message renders the choice buttons below. */
 const OFFER_MARKER = "[[OFFER_DOCUMENT]]";
 
+/**
+ * The "thinking" trace. While the agent works (`live`), it shows the current
+ * step as an animated, shimmering line so the wait reads as progress rather
+ * than a dead spinner. Click it — live or afterwards — to expand every tool
+ * call the agent made, with the exact query it ran against the database.
+ */
+function ThinkingTrace({ steps, live = false }: { steps: AgentStep[]; live?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const tools = steps.filter((s) => s.type === "tool");
+  const latest = steps[steps.length - 1];
+  // Live with nothing yet: a plain "Thinking…" shimmer. Live with steps: the
+  // newest step's label. Done: a summary of how much work it took.
+  const headline = live
+    ? (latest?.label ?? "Thinking…")
+    : tools.length === 0
+      ? "Answered directly"
+      : `Looked at ${tools.length} ${tools.length === 1 ? "query" : "queries"}`;
+
+  return (
+    <div className="min-w-0 max-w-[85%]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="group inline-flex max-w-full items-center gap-1.5 rounded-2xl rounded-tl-sm border border-edge bg-surface-muted px-3.5 py-2.5 text-left text-sm text-ink-muted transition-colors hover:border-brand-400"
+      >
+        <ChevronRight
+          className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open && "rotate-90")}
+          aria-hidden
+        />
+        <span className={cn("truncate", live && "shimmer-text font-medium text-ink")}>{headline}</span>
+        {live && (
+          <span className="ml-1 inline-flex shrink-0 gap-1" aria-hidden>
+            {[0, 1, 2].map((i) => (
+              <motion.span
+                key={i}
+                animate={{ opacity: [0.3, 1, 0.3] }}
+                transition={{ duration: 1.1, repeat: Infinity, delay: i * 0.18 }}
+                className="h-1 w-1 rounded-full bg-accent-500"
+              />
+            ))}
+          </span>
+        )}
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && tools.length > 0 && (
+          <motion.ul
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="mt-1.5 space-y-1.5 overflow-hidden pl-1"
+          >
+            {tools.map((s, i) => (
+              <li key={i} className="rounded-lg border border-edge/70 bg-surface px-3 py-2 text-xs">
+                <div className="flex items-center gap-1.5 font-medium text-ink">
+                  <Database className="h-3 w-3 shrink-0 text-brand-600" aria-hidden />
+                  {s.label}
+                </div>
+                {s.args && Object.keys(s.args).length > 0 && (
+                  <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink-muted">
+                    {formatArgs(s.args)}
+                  </pre>
+                )}
+              </li>
+            ))}
+          </motion.ul>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** Compact one-line-ish view of a tool call's arguments, dropping nulls. */
+function formatArgs(args: Record<string, unknown>): string {
+  const clean = Object.fromEntries(Object.entries(args).filter(([, v]) => v !== null && v !== undefined && v !== ""));
+  return Object.keys(clean).length ? JSON.stringify(clean, null, 1).replace(/\n\s*/g, " ").replace(/([{,])/g, "$1 ") : "no filters";
+}
+
 export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "trainer"> }) {
   const router = useRouter();
   const session = useSession();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [mode, setMode] = useState<AgentMode | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -130,11 +213,13 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
     setMessages(history);
     setInput("");
     setThinking(true);
+    setLiveSteps([]);
     try {
       const reply = await askAgent(
         history,
         { userId: session.userId, role, userName: session.name, userEmail: session.email },
         conversationId,
+        (step) => setLiveSteps((prev) => [...prev, step]),
       );
       setMode(reply.mode);
       if (reply.conversationId) setConversationId(reply.conversationId);
@@ -145,6 +230,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
           role: "assistant",
           content: reply.content,
           createdAt: new Date().toISOString(),
+          steps: reply.steps,
         },
       ]);
       // The agent just created / edited / deleted a record — invalidate the
@@ -153,6 +239,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
       return reply.content;
     } finally {
       setThinking(false);
+      setLiveSteps([]);
     }
   };
 
@@ -268,6 +355,11 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
                       message.role === "user" ? "max-w-[85%] text-right" : "max-w-[92%]",
                     )}
                   >
+                    {message.role === "assistant" && message.steps && message.steps.some((s) => s.type === "tool") && (
+                      <div className="mb-1.5">
+                        <ThinkingTrace steps={message.steps} />
+                      </div>
+                    )}
                     <div
                       className={cn(
                         "inline-block max-w-full rounded-2xl px-4 py-3 text-left text-sm leading-relaxed",
@@ -341,18 +433,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
                 <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-solid to-accent-500 text-white shadow">
                   <Bot className="h-4 w-4" aria-hidden />
                 </span>
-                <div className="inline-flex items-center gap-1.5 rounded-2xl rounded-tl-sm border border-edge bg-surface-muted px-4 py-3.5">
-                  <span className="sr-only">Assistant is thinking</span>
-                  {[0, 1, 2].map((i) => (
-                    <motion.span
-                      key={i}
-                      aria-hidden
-                      animate={{ y: [0, -5, 0] }}
-                      transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.15 }}
-                      className="h-1.5 w-1.5 rounded-full bg-accent-600"
-                    />
-                  ))}
-                </div>
+                <ThinkingTrace steps={liveSteps} live />
               </motion.div>
             )}
           </div>

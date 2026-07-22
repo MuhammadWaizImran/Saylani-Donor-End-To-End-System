@@ -48,6 +48,54 @@ function sourcesFor(toolName: string, args: Record<string, unknown>): string[] {
   return TOOL_SOURCES[toolName] ?? [];
 }
 
+/** A short, human sentence for what a tool call is doing — shown live in the
+ *  "thinking" trace so the user sees the work, not just a spinner. Kept plain
+ *  and non-technical; the raw args are streamed alongside for anyone who
+ *  opens the trace. */
+function describeStep(name: string, args: Record<string, unknown>): string {
+  const s = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : "");
+  switch (name) {
+    case "describe_schema":
+      return s("collection") ? `Looking up the ${s("collection")} structure` : "Mapping the database";
+    case "query_collection": {
+      const c = s("collection");
+      return s("group_by") ? `Counting ${c} by ${s("group_by")}` : `Reading ${c || "records"}`;
+    }
+    case "analyze_enrolments":
+      return s("then_by") ? `Grouping enrolments by ${s("group_by")} and ${s("then_by")}` : `Grouping enrolments by ${s("group_by") || "status"}`;
+    case "analyze_fee_payments":
+      return `Analysing fee payments by ${s("group_by") || "month"}`;
+    case "analyze_donations":
+      return `Analysing donations by ${s("group_by") || "month"}`;
+    case "analyze_attendance":
+      return `Checking ${s("subject") || "student"} attendance`;
+    case "analyze_academic_records":
+      return `Reading ${s("record_type") || "results"}`;
+    case "search_audit_logs":
+      return "Searching the audit log";
+    case "get_org_stats":
+      return "Reading organisation totals";
+    case "generate_word_report":
+      return "Building the Word report";
+    default:
+      if (name.startsWith("list_")) return `Listing ${name.slice(5).replace(/_/g, " ")}`;
+      if (name.startsWith("create_")) return `Creating a ${name.slice(7).replace(/_/g, " ")}`;
+      if (name === "update_record") return `Updating a ${s("entity") || "record"}`;
+      if (name === "delete_record") return `Deleting a ${s("entity") || "record"}`;
+      return name.replace(/_/g, " ");
+  }
+}
+
+/** One event in the streamed trace the client renders as "thinking". */
+interface StepEvent {
+  type: "step" | "tool";
+  label: string;
+  /** For tool events: which tool and the exact arguments it ran with, so the
+   *  user can open the trace and see the real query. */
+  tool?: string;
+  args?: Record<string, unknown>;
+}
+
 function addEvidenceFooter(content: string, collections: string[]): string {
   const sources = [...new Set(collections)];
   if (sources.length === 0) return content;
@@ -287,9 +335,87 @@ export async function POST(req: Request) {
   const chatRole = session.role as ChatRole;
   const evidenceCollections: string[] = [];
 
-  /** Saves this turn to chat history (best-effort) and returns the JSON response. */
-  const finish = async (content: string, mode: "live" | "mock", mutated = false) => {
-    const responseContent = addEvidenceFooter(content, evidenceCollections);
+  // The browser asks for a streamed trace; the e2e suite and any plain caller
+  // get the same JSON response as before. Same agent loop feeds both.
+  const wantsStream = (req.headers.get("accept") ?? "").includes("application/x-ndjson");
+
+  interface Result {
+    content: string;
+    mode: "live" | "mock";
+    mutated: boolean;
+  }
+
+  /** Runs the agent loop, calling `emit` as each step happens. Returns the
+   *  final answer. `emit` is a no-op for the JSON path. */
+  const run = async (emit: (e: StepEvent) => void): Promise<Result> => {
+    if (apiKeys.length === 0) return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false };
+
+    try {
+      const thread: GroqMessage[] = [
+        { role: "system", content: buildSystemPrompt(ctx) },
+        ...messages.slice(-12).map((m) => ({ role: m.role, content: m.content })),
+      ];
+
+      let mutated = false;
+
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        emit({ type: "step", label: round === 0 ? "Thinking…" : "Working through the data…" });
+        const reply = await callGroq(thread);
+
+        if (!reply.tool_calls || reply.tool_calls.length === 0) {
+          return {
+            content: reply.content ?? "I couldn't produce a response — please try rephrasing.",
+            mode: "live",
+            mutated,
+          };
+        }
+
+        thread.push(reply);
+
+        // Parse every call in this round first, then run them in parallel —
+        // the model often asks for several independent reads at once, and
+        // waiting for each in turn was a large part of the felt slowness.
+        const calls = reply.tool_calls.map((call) => {
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(call.function.arguments || "{}");
+          } catch {
+            /* malformed args — run with defaults */
+          }
+          if (isMutatingTool(call.function.name)) mutated = true;
+          evidenceCollections.push(...sourcesFor(call.function.name, args));
+          emit({ type: "tool", label: describeStep(call.function.name, args), tool: call.function.name, args });
+          return { call, args };
+        });
+
+        const results = await Promise.all(
+          calls.map(async ({ call, args }) => {
+            let result = await executeTool(call.function.name, args, ctx);
+            if (result.length > MAX_TOOL_RESULT_CHARS) {
+              result = `${result.slice(0, MAX_TOOL_RESULT_CHARS)}… [truncated — ask a narrower question for full detail]`;
+            }
+            return { id: call.id, result };
+          }),
+        );
+        for (const { id, result } of results) {
+          thread.push({ role: "tool", tool_call_id: id, content: result });
+        }
+      }
+
+      return {
+        content: "I gathered the data but hit my reasoning limit for this question — try asking it in a more specific way.",
+        mode: "live",
+        mutated,
+      };
+    } catch (error) {
+      console.error("[api/chat] all Groq keys failed:", error);
+      return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false };
+    }
+  };
+
+  /** Saves the turn to history (best-effort) and returns the final payload. */
+  const finalize = async (r: Result) => {
+    const responseContent = addEvidenceFooter(r.content, evidenceCollections);
     const savedId = await saveTurn({
       conversationId,
       userId: session.userId,
@@ -297,61 +423,38 @@ export async function POST(req: Request) {
       userMessage: lastUserMessage,
       assistantMessage: responseContent,
     });
-    return NextResponse.json({ content: responseContent, mode, mutated, conversationId: savedId });
+    return { content: responseContent, mode: r.mode, mutated: r.mutated, conversationId: savedId };
   };
 
-  if (apiKeys.length === 0) {
-    return finish(AI_UNAVAILABLE_MESSAGE, "mock");
+  if (!wantsStream) {
+    const done = await finalize(await run(() => {}));
+    return NextResponse.json(done);
   }
 
-  try {
-    const thread: GroqMessage[] = [
-      { role: "system", content: buildSystemPrompt(ctx) },
-      ...messages.slice(-12).map((m) => ({ role: m.role, content: m.content })),
-    ];
-
-    // Tracks whether any tool that changed the database ran this turn, so the
-    // client can refresh the dashboard views to reflect the create/edit/delete.
-    let mutated = false;
-
-    // Agent loop: keep executing tool calls until the model answers in text.
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const reply = await callGroq(thread);
-
-      if (!reply.tool_calls || reply.tool_calls.length === 0) {
-        return finish(
-          reply.content ?? "I couldn't produce a response — please try rephrasing.",
-          "live",
-          mutated,
-        );
+  // NDJSON stream: one JSON object per line. Steps as they happen, then a
+  // final {type:"done", …} carrying the same fields the JSON path returns.
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const write = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+      try {
+        const result = await run((e) => write(e));
+        const done = await finalize(result);
+        write({ type: "done", ...done });
+      } catch (error) {
+        console.error("[api/chat] stream failed:", error);
+        write({ type: "done", content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false, conversationId: null });
+      } finally {
+        controller.close();
       }
+    },
+  });
 
-      thread.push(reply);
-      for (const call of reply.tool_calls) {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(call.function.arguments || "{}");
-        } catch {
-          // Malformed arguments — run the tool with defaults.
-        }
-        if (isMutatingTool(call.function.name)) mutated = true;
-        evidenceCollections.push(...sourcesFor(call.function.name, args));
-        let result = await executeTool(call.function.name, args, ctx);
-        if (result.length > MAX_TOOL_RESULT_CHARS) {
-          result = `${result.slice(0, MAX_TOOL_RESULT_CHARS)}… [truncated — ask a narrower question for full detail]`;
-        }
-        thread.push({ role: "tool", tool_call_id: call.id, content: result });
-      }
-    }
-
-    return finish(
-      "I gathered the data but hit my reasoning limit for this question — try asking it in a more specific way.",
-      "live",
-      mutated,
-    );
-  } catch (error) {
-    console.error("[api/chat] all Groq keys failed:", error);
-    // Say we're offline — never answer from the demo dataset.
-    return finish(AI_UNAVAILABLE_MESSAGE, "mock");
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
