@@ -6,9 +6,11 @@
  * persistence fails.
  */
 import { ObjectId } from "mongodb";
+import type { ChartSpec } from "./chart-spec";
 import { isMongoConfigured, mongo } from "@/lib/mongodb";
 
 export interface StoredMessage {
+  charts?: ChartSpec[];
   role: "user" | "assistant";
   content: string;
   createdAt: string;
@@ -52,13 +54,14 @@ export async function saveTurn(params: {
   role: "admin" | "trainer";
   userMessage: string;
   assistantMessage: string;
+  charts?: ChartSpec[];
 }): Promise<string | null> {
   if (!isMongoConfigured()) return null;
   const { conversationId, userId, role, userMessage, assistantMessage } = params;
   const now = new Date();
   const turn: StoredMessage[] = [
     { role: "user", content: userMessage, createdAt: now.toISOString() },
-    { role: "assistant", content: assistantMessage, createdAt: now.toISOString() },
+    { role: "assistant", content: assistantMessage, createdAt: now.toISOString(), charts: params.charts ?? [] },
   ];
 
   try {

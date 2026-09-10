@@ -1,0 +1,84 @@
+[
+  {
+    "question": "How many unique student profiles and enrolments are there? Query current data.",
+    "ms": 2215,
+    "content": "**Unique student profiles:** 102  \n**Total enrolments:** 114  \n\nThese numbers come from the current organization stats and cover all records in the system. No further action is needed unless you want a deeper breakdown (e.g., enrolments by campus or course).\n\n---\nSource: current database queries (get_org_stats).",
+    "charts": [],
+    "model": "openai/gpt-oss-120b",
+    "provider": "groq",
+    "mutated": false,
+    "mode": "live",
+    "steps": [
+      {
+        "ms": 3,
+        "type": "step",
+        "label": "Understanding your question…"
+      },
+      {
+        "ms": 705,
+        "type": "tool",
+        "label": "Checking get org stats…",
+        "tool": "get_org_stats",
+        "args": {}
+      },
+      {
+        "ms": 1560,
+        "type": "step",
+        "label": "Checking the evidence…"
+      }
+    ]
+  },
+  {
+    "question": "What is the average salary of our placed graduates? Explain what data is missing.",
+    "ms": 5070,
+    "content": "**Answer**\n\nThe system does not store any data that links a graduate to a specific job **and** records the salary they receive after placement. The only salary‑related field is in the **jobs** collection, which holds the *salary range* for each **vacancy** (e.g., `salary.min` and `salary.max`). This collection is for advertised positions, not for actual hires, and there is no record that tells us which student was placed in which job or what salary they earned.\n\n**What’s missing to compute an average placed‑graduate salary**\n\n| Missing data | Where it would need to be stored | Why it’s needed |\n|--------------|----------------------------------|-----------------|\n| A placement record that ties a student (student ID) to a job (job ID) | A new **placements** collection or a field in `student_inductions`/`students` (e.g., `placed_job_id`) | To identify which graduates actually got hired. |\n| The actual salary paid to the graduate (numeric, consistent unit) | In the placement record (e.g., `salary_amount`) or a confirmed `salary` field from the job that was accepted | To calculate a numeric average. |\n| Currency and period (monthly/annual) | Part of the salary field definition | To aggregate comparable numbers. |\n\n**Current evidence**\n\n- **students**: unique graduate profiles (no placement info).  \n- **student_inductions**: enrolment events (no post‑graduation outcomes).  \n- **jobs**: job postings with a salary range, but no indication of who was hired.\n\nBecause these essential pieces are absent, an average salary for placed graduates cannot be derived at this time. Adding a placement tracking collection with salary details would enable the calculation.\n\n---\nSource: current database queries (describe_schema).",
+    "charts": [],
+    "model": "openai/gpt-oss-120b",
+    "provider": "groq",
+    "mutated": false,
+    "mode": "live",
+    "steps": [
+      {
+        "ms": 1,
+        "type": "step",
+        "label": "Understanding your question…"
+      },
+      {
+        "ms": 2573,
+        "type": "step",
+        "label": "Checking the evidence…"
+      },
+      {
+        "ms": 3339,
+        "type": "tool",
+        "label": "Checking describe schema…",
+        "tool": "describe_schema",
+        "args": {
+          "collection": "jobs"
+        }
+      },
+      {
+        "ms": 3567,
+        "type": "step",
+        "label": "Checking the evidence…"
+      }
+    ]
+  },
+  {
+    "question": "Mujhe chart bana ke do.",
+    "ms": 870,
+    "content": "Sure! To create a useful chart I need a bit more detail:\n\n1. **What metric do you want to see?** (e.g., number of student enrolments, total fee payments, donations, trainer hours, etc.)  \n2. **How would you like it grouped?** (by campus, by month, by course, by trainer, etc.)  \n3. **Preferred chart type?** – Bar for comparisons, line for trends over time, pie for a few parts of a whole.  \n\nLet me know these three points and I’ll build the chart for you.",
+    "charts": [],
+    "model": "openai/gpt-oss-120b",
+    "provider": "groq",
+    "mutated": false,
+    "mode": "live",
+    "steps": [
+      {
+        "ms": 1,
+        "type": "step",
+        "label": "Understanding your question…"
+      }
+    ]
+  }
+]

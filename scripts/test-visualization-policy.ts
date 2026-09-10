@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { visualizationHint } from '../lib/ai/visualization-policy';
+const hint=(rows: unknown[], tool='analyze_enrolments',args:Record<string,unknown>={group_by:'campus'})=>visualizationHint({tool,args,data:{rows}});
+assert.equal(hint([{campus:'A',count:12},{campus:'B',count:4}])?.suggested_type,'bar');
+assert.equal(hint([{month:'2026-01',count:12},{month:'2026-02',count:4}])?.suggested_type,'line');
+assert.equal(hint([{campus:'A',count:12}]),null);
+assert.equal(hint([{campus:'A',count:12},{campus:'B',count:null}]),null);
+assert.equal(hint([{name:'A',salary:12},{name:'B',salary:4}],'query_collection',{}),null);
+assert.equal(hint([{campus:'A',count:12},{campus:'A',count:4}]),null);
+assert.equal(hint([]),null);
+console.log('PASS aggregate and temporal suggestions; single totals, missing values, raw records, duplicate labels and empty data excluded.');

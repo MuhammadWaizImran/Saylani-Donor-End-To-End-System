@@ -1,525 +1,118 @@
 import { NextResponse } from "next/server";
-import { AI_UNAVAILABLE_MESSAGE, type AgentContext } from "@/lib/ai/context";
-import { executeTool, toolDefinitions } from "@/lib/ai/tools";
+import { z } from "zod";
 import { getSessionUser } from "@/lib/auth-server";
 import { saveTurn } from "@/lib/ai/chat-store";
+import { runAgent } from "@/lib/ai/engine";
 
-/**
- * Providers are tried in order, first working one wins. OpenRouter leads with
- * gpt-5.6-sol: a far stronger tool-caller than gpt-oss and a 1M-token context,
- * so it isn't throttled the way Groq's free tier is (8k tokens/minute). Groq
- * stays as the fallback — if OpenRouter is unconfigured, out of credits, or
- * down, the assistant keeps working on Groq rather than going dark.
- *
- * Each provider carries its own keys, models and per-request tuning, because
- * a reasoning model (gpt-5.6-sol) spends completion tokens on its own thinking
- * and needs a larger max_tokens than a plain chat model, or the answer gets
- * truncated before it starts.
- */
-interface Provider {
-  name: string;
-  url: string;
-  keys: string[];
-  models: string[];
-  maxTokens: number;
-  /** OpenRouter reasoning models accept this to keep thinking (and cost/latency) in check. */
-  reasoningEffort?: "low" | "medium" | "high";
-  headers?: Record<string, string>;
-}
-
-/** Collects a numbered key series from the environment: NAME, NAME_2, NAME_3,
- *  NAME_4. Free OpenRouter accounts each carry their own small daily
- *  allowance, so several keys stacked here multiply the free budget before
- *  anything falls through to Groq. */
-function collectKeys(base: string): string[] {
-  return [process.env[base], process.env[`${base}_2`], process.env[`${base}_3`], process.env[`${base}_4`]]
-    .filter((k): k is string => Boolean(k && k.trim()))
-    .map((k) => k.trim());
-}
-
-const openRouterKeys = collectKeys("OPENROUTER_API_KEY");
-const groqKeys = collectKeys("GROQ_API_KEY");
-
-const PROVIDERS: Provider[] = [
-  ...(openRouterKeys.length
-    ? [
-        {
-          name: "openrouter",
-          url: "https://openrouter.ai/api/v1/chat/completions",
-          keys: openRouterKeys,
-          models: [process.env.OPENROUTER_MODEL || "openai/gpt-5.6-sol"],
-          maxTokens: 2500,
-          reasoningEffort: "low" as const,
-          // Optional attribution headers OpenRouter uses for its dashboards;
-          // harmless if omitted, so no secret or required value lives here.
-          headers: {
-            "HTTP-Referer": "https://saylani-donor-end-to-end-system.vercel.app",
-            "X-Title": "Saylani Intelligence",
-          },
-        },
-      ]
-    : []),
-  ...(groqKeys.length
-    ? [
-        {
-          name: "groq",
-          url: "https://api.groq.com/openai/v1/chat/completions",
-          keys: groqKeys,
-          models: [
-            ...(process.env.GROQ_MODEL ? [process.env.GROQ_MODEL] : []),
-            "openai/gpt-oss-120b",
-            "llama-3.3-70b-versatile",
-          ].filter((m, i, arr) => arr.indexOf(m) === i),
-          maxTokens: 1024,
-        },
-      ]
-    : []),
-];
-
-const MAX_TOOL_ROUNDS = 6;
-/** Cap a single tool result so one big table can't blow a tight token budget. */
-const MAX_TOOL_RESULT_CHARS = 6_000;
-
-/** A visible provenance footer makes every data answer independently auditable. */
-const TOOL_SOURCES: Record<string, string[]> = {
-  get_org_stats: ["campus", "student_inductions", "trainers", "new_courses", "slots"],
-  analyze_enrolments: ["student_inductions", "students", "courses", "campus", "trainers"],
-  list_campuses: ["campus", "student_inductions", "trainers"],
-  list_students: ["student_inductions", "students", "courses", "campus", "trainers"],
-  list_trainers: ["trainers", "student_inductions", "campus"],
-  list_courses: ["new_courses", "courses", "student_inductions", "slots"],
-  list_active_classes: ["slots", "student_inductions", "courses", "campus", "trainers"],
-  list_placed_students: ["student_inductions", "students"],
-  analyze_fee_payments: ["payments"],
-  analyze_donations: ["donations", "campaigns"],
-  analyze_attendance: ["attendances", "trainer_attendances"],
-  analyze_academic_records: ["results", "certificates", "assignment_submissions"],
-  search_audit_logs: ["logs"],
-};
-
-/** Which collections a tool call actually read. Fixed for the purpose-built
- *  tools; for query_collection it's whatever collection the model asked for,
- *  so the footer stays truthful as the agent roams the wider schema. */
-function sourcesFor(toolName: string, args: Record<string, unknown>): string[] {
-  if (toolName === "query_collection") {
-    const c = String(args.collection ?? "").trim();
-    return c ? [c] : [];
-  }
-  return TOOL_SOURCES[toolName] ?? [];
-}
-
-/** A short, human sentence for what a tool call is doing — shown live in the
- *  "thinking" trace so the user sees the work, not just a spinner. Kept plain
- *  and non-technical; the raw args are streamed alongside for anyone who
- *  opens the trace. */
-function describeStep(name: string, args: Record<string, unknown>): string {
-  const s = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : "");
-  switch (name) {
-    case "describe_schema":
-      return s("collection") ? `Looking up the ${s("collection")} structure` : "Mapping the database";
-    case "query_collection": {
-      const c = s("collection");
-      return s("group_by") ? `Counting ${c} by ${s("group_by")}` : `Reading ${c || "records"}`;
-    }
-    case "analyze_enrolments":
-      return s("then_by") ? `Grouping enrolments by ${s("group_by")} and ${s("then_by")}` : `Grouping enrolments by ${s("group_by") || "status"}`;
-    case "analyze_fee_payments":
-      return `Analysing fee payments by ${s("group_by") || "month"}`;
-    case "analyze_donations":
-      return `Analysing donations by ${s("group_by") || "month"}`;
-    case "analyze_attendance":
-      return `Checking ${s("subject") || "student"} attendance`;
-    case "analyze_academic_records":
-      return `Reading ${s("record_type") || "results"}`;
-    case "search_audit_logs":
-      return "Searching the audit log";
-    case "get_org_stats":
-      return "Reading organisation totals";
-    case "generate_word_report":
-      return "Building the Word report";
-    default:
-      if (name.startsWith("list_")) return `Listing ${name.slice(5).replace(/_/g, " ")}`;
-      if (name.startsWith("create_")) return `Creating a ${name.slice(7).replace(/_/g, " ")}`;
-      if (name === "update_record") return `Updating a ${s("entity") || "record"}`;
-      if (name === "delete_record") return `Deleting a ${s("entity") || "record"}`;
-      return name.replace(/_/g, " ");
-  }
-}
-
-/** One event in the streamed trace the client renders as "thinking". */
-interface StepEvent {
-  type: "step" | "tool";
-  label: string;
-  /** For tool events: which tool and the exact arguments it ran with, so the
-   *  user can open the trace and see the real query. */
-  tool?: string;
-  args?: Record<string, unknown>;
-}
-
-function addEvidenceFooter(content: string, collections: string[]): string {
-  const sources = [...new Set(collections)];
-  if (sources.length === 0) return content;
-  return `${content.trim()}\n\n---\nSource: live MongoDB collection${sources.length === 1 ? "" : "s"} \`${sources.join("`, `")}\`. Generated from the current database query.`;
-}
-
-/** True when at least one provider has keys — i.e. the agent can run live. */
-const hasAnyProvider = PROVIDERS.length > 0;
-
-const RETRYABLE_STATUSES = new Set([401, 403, 429, 500, 502, 503]);
-
-/** Tools that change the database — used to tell the client to refresh the
- *  dashboard after the agent creates, edits, or deletes a record. */
-function isMutatingTool(name: string): boolean {
-  return name.startsWith("create_") || name === "update_record" || name === "delete_record";
-}
-
-interface IncomingMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-/** Roles allowed to use the AI assistant — also the roles conversations are stored under. */
-type ChatRole = "admin" | "trainer";
-
-interface GroqMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
-  tool_calls?: Array<{
-    id: string;
-    type: "function";
-    function: { name: string; arguments: string };
-  }>;
-  tool_call_id?: string;
-}
-
-function buildSystemPrompt(ctx: AgentContext): string {
-  return [
-    `You are "Saylani Intelligence" — a friendly AI companion AND a capable operations agent for SMIT (Saylani Mass IT Training), a Pakistani non-profit running free IT education campuses.`,
-    `You are talking to ${ctx.userName}, ${ctx.role === "admin" ? "an ADMIN with full organizational access" : "a TRAINER who may only see their own students, courses, classes, and placements"}.`,
-    ``,
-    `You naturally switch between two behaviours depending on what the user says:`,
-    ``,
-    `1) COMPANION — when the user greets you, makes small talk, asks how you are, asks general questions, wants advice, or just chats: respond like a warm, witty human colleague. Keep it short and natural (1–3 sentences). Match their language — English, Urdu, or Roman Urdu (very common, e.g. "kaise ho") — and mirror their tone. Do NOT call tools or dump data during casual chat.`,
-    ``,
-    `2) AGENT — the moment the user gives you a task or asks anything about data (reports, numbers, lists, comparisons, summaries, analysis of campuses/students/trainers/courses/classes/placements): use your tools to fetch the real data and complete the task fully and accurately. Never invent numbers — always fetch first.`,
-    ``,
-    ctx.role === "admin"
-      ? [
-          `DATA ENTRY (admins only): you have FULL database access — CREATE (create_*), EDIT (update_record), and DELETE (delete_record) on students, campuses, trainers, courses, and classes. Follow this discipline strictly:`,
-          `- If any REQUIRED field is missing, ask for it in ONE short message before creating. Optional fields may be sensibly defaulted.`,
-          `- When a record references a campus/course/trainer, pass the name the admin gave — the tool resolves names to ids. If the tool replies "not found", call the matching list tool, show the closest options, and ask the admin to pick. Do not guess.`,
-          `- For update_record: only pass the fields the admin actually wants changed. For students, prefer identifying by email (names collide) — if update_record/delete_record replies "multiple students match", show the options it returned and ask which one.`,
-          `- For delete_record: this is IRREVERSIBLE. Unless the admin already said something unambiguous like "yes delete it" / "confirmed", ask once ("Delete Ali Khan's record — you're sure?") before calling the tool. If the tool refuses because other records still reference it (e.g. a campus with students), explain that plainly — don't try to force it.`,
-          `- A write/edit/delete is only done when the tool returns {"success": true}. Then confirm to the admin exactly what changed, quoting the details. If the tool returns an error, tell the admin plainly what failed and what you need — NEVER claim something was saved/changed/deleted when it wasn't.`,
-          `- Never create, edit, or delete records the admin did not explicitly ask for.`,
-        ].join("\n")
-      : `You cannot add or modify data — if asked, explain that only admins can do data entry.`,
-    ``,
-    `Rules:`,
-    `- Today's date is ${new Date().toISOString().slice(0, 10)}.`,
-    // No salary-formatting rule here any more: placements and salaries are
-    // not recorded anywhere in this database, so a rule for formatting them
-    // only taught the model that such a number was available to quote.
-    `- Currency is PKR; NEVER use ₹ or Indian formatting. Trainers are paid HOURLY — format their rate like "Rs. 1,200/hour", never "/month".`,
-    `- Write ONLY in English or Roman Urdu (Latin script). NEVER use Hindi/Devanagari script.`,
-    `- Data answers: one-line intro, then clean skimmable structure; end with one concrete recommendation when useful.`,
-    `- ALWAYS use the real names, numbers, and details exactly as returned by your tools — never write placeholders like "Student 1".`,
-    `- If a question needs data from multiple tools (e.g. comparing campuses AND trainers), call all the tools you need before answering.`,
-    ``,
-    `QUERY DISCIPLINE — this is where wrong answers come from. Follow it exactly:`,
-    `1. LOOK UP BEFORE YOU FILTER. Never guess a field name or a status value. describe_schema gives you the REAL values for that collection. Guessing "awarded" when the data says "approved" returns nothing — and an empty result reads exactly like a true zero, so you report "none" and are confidently wrong.`,
-    `2. AN EMPTY RESULT IS NOT PROOF OF ZERO. Before you ever say "there are none", re-run the query WITHOUT your filter and group_by that same field. That shows which values actually exist. Only after seeing them do you either answer correctly or report the real breakdown. A filtered query returning 0 rows usually means your filter was wrong, not that the data is missing.`,
-    `3. COUNT WITH group_by, NEVER BY HAND. Listing rows and tallying them yourself silently misses everything past the row limit, so the total comes out too low.`,
-    `4. NUMBERS TRAVEL UNCHANGED. Report exactly the figures the tool returned — no rounding, no recalculating, no adding totals from two tools together unless they measure the very same thing.`,
-    `5. IF A TOOL ERRORS OR A FIELD DOESN'T EXIST, SAY SO. Never fill the gap with a plausible-sounding number, and never present a real number as the answer to a slightly different question than the one asked.`,
-    ``,
-    `DATABASE — you can reach all 53 collections. Only the essentials are below; call describe_schema for anything else (no arguments lists every collection, a collection name gives its fields, joins and traps). Never guess a field name — look it up.`,
-    `- \`student_inductions\` is the HUB: ONE ROW PER ENROLMENT, not per person (a student who enrols twice has two rows). It holds the status, the dates, and the foreign keys to everything else.`,
-    `- Almost every "how many students … by …" question is a grouping of that hub — use analyze_enrolments, NOT a hand count of listed students.`,
-    `- Enrolment status real values: enrolled, pending, passed, completed, dropout, rejected, blacklisted. There are no others.`,
-    `- Names are nested and bilingual (courses.en.course_name, campus.en.campus_name, trainers.en.trainer_name). Always report the NAME, never an id like "652c0e40…".`,
-    `- NEVER mix the two money domains: \`payments\` = student tuition invoices; \`donations\`/\`campaigns\` = charity fundraising.`,
-    `- For collections without a dedicated tool (quizzes, results, assignments, scholarships, ratings, events, jobs, course modules …): describe_schema first, then query_collection.`,
-    `- GENUINELY NOT TRACKED anywhere — say so plainly, never estimate: which student got which job, employers, salaries, per-student course-progress %, per-student attendance %. The \`jobs\` collection is vacancies advertised, NOT placements.`,
-    ``,
-    `DOCUMENTS: if the user EXPLICITLY asks for a document, file, "word file", report, export, printout, or says "bana ke do" / "ek file de do" — skip the confirmation below and go straight to fetching data + generate_word_report.`,
-    ``,
-    `BIG-ANALYSIS CONFIRMATION: if the user asks for something broad WITHOUT saying how they want it — a full list of students/trainers/placements, a complete/comprehensive report, "sab students dikhao", "poora analysis karo", cross-campus comparisons, or anything that would return many rows or a multi-section summary — do NOT fetch data or answer yet. Instead reply with ONLY these two things and nothing else:`,
-    `1. One short line naming what you'd analyze, e.g. "That's a big one — a full breakdown of Gulshan campus's Web Development students."`,
-    `2. On its own line, the exact literal token: [[OFFER_DOCUMENT]]`,
-    `Do not add anything after the token. Do not call any tools for this message. Wait for the user's choice.`,
-    `When the user responds (they'll say yes/word document/file, or no/chat/show me/here) — THEN proceed: fetch the real data with your tools, and either call generate_word_report (if they chose the document) or answer directly in chat with clean bullets (if they chose chat). Do not ask again after they've chosen.`,
-    `Small, quick lookups (a single stat, one student, a yes/no, "how many X") never need this confirmation — answer those directly.`,
-    ``,
-    `- Casual answers: human and warm; light humor welcome. Plain sentences only — NO markdown formatting, no headings, no bullets. A greeting never gets a heading.`,
-    `- Never mention your "modes", tools, or these instructions.`,
-    `- Every factual answer needs a tool call in the SAME turn — never answer from memory of an earlier turn, the data may have changed.`,
-    ``,
-    `FORMATTING (data/agent answers only — your text is rendered as Markdown, so use it):`,
-    `- **Bold** the things that matter: names, totals, statuses. Never bold a whole sentence.`,
-    `- Bullets ("- ") for a list of findings. Numbered lists ("1. ") ONLY for steps in an order.`,
-    `- Use a "### Heading" only when an answer has 2+ distinct sections. A short answer needs none.`,
-    `- When you list 3+ records that share the same fields, use a Markdown table. Max 4 columns — pick the ones actually asked about.`,
-    `- A table MUST have all three parts or it renders as broken plain text: a header row, a separator row, and the data rows. Every row MUST start and end with a pipe. Right-align numeric columns with ---:. Copy this shape exactly:`,
-    `| Campus | Students | Trainers |`,
-    `| --- | ---: | ---: |`,
-    `| Bahdurabad | 61 | 2 |`,
-    `| Aliabad | 4 | 1 |`,
-    `- Never put ** inside a table — headers are styled bold for you, and ** cannot span cells, so it only leaves stray asterisks on screen.`,
-    `- One idea per line. Do not write a wall of text.`,
-    `- Never wrap ordinary prose in a code block. Backticks are for values like emails or ids only.`,
-    `- Never write raw HTML.`,
-  ].join("\n");
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Calls the model, walking every provider → model → key in order until one
- * answers. All the providers here speak the OpenAI chat-completions shape, so
- * the request body is nearly identical; only the URL, keys, model list and a
- * couple of tuning fields differ (see PROVIDERS).
- */
-async function callModel(messages: GroqMessage[]): Promise<GroqMessage> {
-  let lastError: Error | null = null;
-
-  for (const provider of PROVIDERS) {
-    for (const model of provider.models) {
-      // Walk every key in turn. A key that's out of its (free) daily budget
-      // returns 402 — when that happens we move to the NEXT key, so all of a
-      // provider's keys are exhausted before control falls to the next
-      // provider (Groq). One transient retry per key covers brief 429s and
-      // tool_use_failed hiccups without holding up the failover.
-      let modelUnavailable = false;
-      for (let keyIndex = 0; keyIndex < provider.keys.length && !modelUnavailable; keyIndex++) {
-        for (let tries = 0; tries < 2; tries++) {
-          const res = await fetch(provider.url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${provider.keys[keyIndex]}`,
-              ...provider.headers,
-            },
-            body: JSON.stringify({
-              model,
-              messages,
-              tools: toolDefinitions,
-              tool_choice: "auto",
-              // Low variance keeps tool selection and number reporting stable.
-              temperature: 0.1,
-              max_tokens: provider.maxTokens,
-              ...(provider.reasoningEffort ? { reasoning_effort: provider.reasoningEffort } : {}),
-            }),
-          });
-
-          if (res.ok) {
-            const data = await res.json();
-            const raw = data.choices?.[0]?.message as (GroqMessage & Record<string, unknown>) | undefined;
-            if (!raw) {
-              lastError = new Error(`${provider.name} ${model}: empty choices`);
-              console.warn(`[api/chat] ${lastError.message}`);
-              break; // next key
-            }
-            // Reasoning models (gpt-oss, gpt-5.6-sol) return a `reasoning`
-            // field alongside the reply. Kept on the message it rides back up
-            // with the next request, and other providers reject it with a 400
-            // — which is exactly what broke the fallback before. Only the
-            // defined fields travel onward.
-            const { role, content, tool_calls, tool_call_id } = raw;
-            return {
-              role,
-              content: content ?? null,
-              ...(tool_calls ? { tool_calls } : {}),
-              ...(tool_call_id ? { tool_call_id } : {}),
-            };
-          }
-
-          const body = await res.text();
-          lastError = new Error(`${provider.name} ${model} key #${keyIndex + 1} → ${res.status}: ${body.slice(0, 200)}`);
-          console.warn(`[api/chat] ${lastError.message}`);
-
-          // Model itself not available here (gone/decommissioned) → no other
-          // key will help, so abandon this provider entirely.
-          if (res.status === 404 || (res.status === 400 && /model/i.test(body) && !body.includes("tool_use_failed"))) {
-            modelUnavailable = true;
-            break;
-          }
-          // This KEY is out of credit/allowance, unauthorized, or forbidden →
-          // no point retrying it; move straight to the next key.
-          if (res.status === 402 || res.status === 401 || res.status === 403) break;
-
-          const transientToolFailure = res.status === 400 && body.includes("tool_use_failed");
-          if (!RETRYABLE_STATUSES.has(res.status) && !transientToolFailure) break; // next key
-          if (res.status === 429) {
-            // Honor the provider's own "try again in Ns" hint (capped) so the
-            // retry lands inside the window instead of guessing.
-            const hint = body.match(/try again in ([\d.]+)(m?s)/i);
-            const waitMs = hint ? Number(hint[1]) * (hint[2].toLowerCase() === "ms" ? 1 : 1000) : 1500;
-            await sleep(Math.min(Math.max(waitMs + 300, 800), 8000));
-          }
-          // fall through to the second try for this key
-        }
-      }
-    }
-  }
-  throw lastError ?? new Error("No AI providers configured");
-}
+export const maxDuration = 300;
+const schema = z.object({
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().min(1).max(16000),
+      }),
+    )
+    .min(1)
+    .max(100),
+  conversationId: z
+    .string()
+    .regex(/^[a-f0-9]{24}$/i)
+    .nullable()
+    .optional(),
+});
 
 export async function POST(req: Request) {
-  // Role/identity come from the VERIFIED session — never from the client body.
   const session = await getSessionUser(req);
-  if (!session) {
-    return NextResponse.json({ error: "Please log in to use the assistant." }, { status: 401 });
-  }
-  if (session.role !== "admin" && session.role !== "trainer") {
+  if (!session)
+    return NextResponse.json({ error: "Please log in." }, { status: 401 });
+  if (session.role !== "admin" && session.role !== "trainer")
     return NextResponse.json(
-      { error: "The AI assistant is restricted to admins and trainers." },
+      { error: "Admins and trainers only." },
       { status: 403 },
     );
-  }
-
-  let payload: { messages?: IncomingMessage[]; conversationId?: string | null };
+  let body: unknown;
   try {
-    payload = await req.json();
+    body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid JSON." }, { status: 400 });
   }
-
-  const { messages, conversationId } = payload;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return NextResponse.json({ error: "messages[] is required" }, { status: 400 });
-  }
-
-  const ctx: AgentContext = {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success)
+    return NextResponse.json(
+      {
+        error:
+          "Send valid user/assistant messages and a valid conversation id.",
+      },
+      { status: 422 },
+    );
+  const { messages, conversationId } = parsed.data;
+  if (messages.at(-1)?.role !== "user")
+    return NextResponse.json(
+      { error: "The last message must be a user question." },
+      { status: 422 },
+    );
+  const ctx = {
     userId: session.userId,
-    role: session.role,
     userName: session.name,
     userEmail: session.email,
+    role: session.role,
   };
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-  const chatRole = session.role as ChatRole;
-  const evidenceCollections: string[] = [];
-
-  // The browser asks for a streamed trace; the e2e suite and any plain caller
-  // get the same JSON response as before. Same agent loop feeds both.
-  const wantsStream = (req.headers.get("accept") ?? "").includes("application/x-ndjson");
-
-  interface Result {
-    content: string;
-    mode: "live" | "mock";
-    mutated: boolean;
-  }
-
-  /** Runs the agent loop, calling `emit` as each step happens. Returns the
-   *  final answer. `emit` is a no-op for the JSON path. */
-  const run = async (emit: (e: StepEvent) => void): Promise<Result> => {
-    if (!hasAnyProvider) return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false };
-
+  const run = async (emit: Parameters<typeof runAgent>[2]) => {
     try {
-      const thread: GroqMessage[] = [
-        { role: "system", content: buildSystemPrompt(ctx) },
-        ...messages.slice(-12).map((m) => ({ role: m.role, content: m.content })),
-      ];
-
-      let mutated = false;
-
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        emit({ type: "step", label: round === 0 ? "Thinking…" : "Working through the data…" });
-        const reply = await callModel(thread);
-
-        if (!reply.tool_calls || reply.tool_calls.length === 0) {
-          return {
-            content: reply.content ?? "I couldn't produce a response — please try rephrasing.",
-            mode: "live",
-            mutated,
-          };
-        }
-
-        thread.push(reply);
-
-        // Parse every call in this round first, then run them in parallel —
-        // the model often asks for several independent reads at once, and
-        // waiting for each in turn was a large part of the felt slowness.
-        const calls = reply.tool_calls.map((call) => {
-          let args: Record<string, unknown> = {};
-          try {
-            args = JSON.parse(call.function.arguments || "{}");
-          } catch {
-            /* malformed args — run with defaults */
-          }
-          if (isMutatingTool(call.function.name)) mutated = true;
-          evidenceCollections.push(...sourcesFor(call.function.name, args));
-          emit({ type: "tool", label: describeStep(call.function.name, args), tool: call.function.name, args });
-          return { call, args };
-        });
-
-        const results = await Promise.all(
-          calls.map(async ({ call, args }) => {
-            let result = await executeTool(call.function.name, args, ctx);
-            if (result.length > MAX_TOOL_RESULT_CHARS) {
-              result = `${result.slice(0, MAX_TOOL_RESULT_CHARS)}… [truncated — ask a narrower question for full detail]`;
-            }
-            return { id: call.id, result };
-          }),
-        );
-        for (const { id, result } of results) {
-          thread.push({ role: "tool", tool_call_id: id, content: result });
-        }
-      }
-
-      return {
-        content: "I gathered the data but hit my reasoning limit for this question — try asking it in a more specific way.",
-        mode: "live",
-        mutated,
-      };
+      const result = await runAgent(messages, ctx, emit, req.signal);
+      const id = await saveTurn({
+        conversationId,
+        userId: ctx.userId,
+        role: ctx.role,
+        userMessage: messages.at(-1)!.content,
+        assistantMessage: result.content,
+        charts: result.charts,
+      });
+      return { ...result, conversationId: id };
     } catch (error) {
-      console.error("[api/chat] all Groq keys failed:", error);
-      return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false };
+      const reason = (error as Error).message;
+      console.warn("[AI]", reason);
+      return {
+        content: /429/.test(reason)
+          ? "The AI providers are currently rate-limited or out of quota. Please try again shortly, or increase the API quota. I have not completed this answer and will not guess database figures."
+          : /timed out/.test(reason)
+            ? "The AI service took too long to respond. Please retry with a narrower question."
+            : "The AI service is unavailable right now. I could not complete this analysis; please retry. No figures have been guessed.",
+        mode: "mock",
+        mutated: false,
+        charts: [],
+        conversationId,
+      };
     }
   };
-
-  /** Saves the turn to history (best-effort) and returns the final payload. */
-  const finalize = async (r: Result) => {
-    const responseContent = addEvidenceFooter(r.content, evidenceCollections);
-    const savedId = await saveTurn({
-      conversationId,
-      userId: session.userId,
-      role: chatRole,
-      userMessage: lastUserMessage,
-      assistantMessage: responseContent,
-    });
-    return { content: responseContent, mode: r.mode, mutated: r.mutated, conversationId: savedId };
-  };
-
-  if (!wantsStream) {
-    const done = await finalize(await run(() => {}));
-    return NextResponse.json(done);
-  }
-
-  // NDJSON stream: one JSON object per line. Steps as they happen, then a
-  // final {type:"done", …} carrying the same fields the JSON path returns.
+  if (!(req.headers.get("accept") || "").includes("application/x-ndjson"))
+    return NextResponse.json(await run(() => {}));
   const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const write = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
-      try {
-        const result = await run((e) => write(e));
-        const done = await finalize(result);
-        write({ type: "done", ...done });
-      } catch (error) {
-        console.error("[api/chat] stream failed:", error);
-        write({ type: "done", content: AI_UNAVAILABLE_MESSAGE, mode: "mock", mutated: false, conversationId: null });
-      } finally {
-        controller.close();
-      }
+  let cancelled = false;
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        const write = (value: unknown) => {
+          if (!cancelled && !req.signal.aborted)
+            controller.enqueue(encoder.encode(JSON.stringify(value) + "\n"));
+        };
+        try {
+          write({ type: "done", ...(await run(write)) });
+        } finally {
+          if (!cancelled) controller.close();
+        }
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+    {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+      },
     },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Accel-Buffering": "no",
-    },
-  });
+  );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ReactNode, type Ref } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -38,6 +38,7 @@ import { useSession } from "@/lib/auth";
 import { useVoice, voiceSupported, type VoiceLang } from "@/lib/voice";
 import { Avatar } from "@/components/portal/ui";
 import { FireflyParticles } from "@/components/portal/firefly-particles";
+import { AiChart } from "@/components/portal/ai-chart";
 import { cn, timeAgo } from "@/lib/utils";
 
 const noopSubscribe = () => () => {};
@@ -145,7 +146,9 @@ function formatArgs(args: Record<string, unknown>): string {
   return Object.keys(clean).length ? JSON.stringify(clean, null, 1).replace(/\n\s*/g, " ").replace(/([{,])/g, "$1 ") : "no filters";
 }
 
-export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "trainer"> }) {
+export type AiAssistantHandle = { pauseVoice: () => void };
+
+export function AiAssistant({ role, compact = false, ref }: { role: Extract<UserRole, "admin" | "trainer">; compact?: boolean; ref?: Ref<AiAssistantHandle> }) {
   const router = useRouter();
   const session = useSession();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -197,7 +200,9 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
   const userName = session?.name ?? "there";
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    if (messages.length > 0) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    }
   }, [messages, thinking]);
 
   const send = async (text: string): Promise<string | null> => {
@@ -231,6 +236,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
           content: reply.content,
           createdAt: new Date().toISOString(),
           steps: reply.steps,
+          charts: reply.charts,
         },
       ]);
       // The agent just created / edited / deleted a record — invalidate the
@@ -257,6 +263,8 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
     setVoiceOpen(false);
   };
 
+  useImperativeHandle(ref, () => ({ pauseVoice: closeVoice }));
+
   const copyMessage = async (message: ChatMessage) => {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -275,7 +283,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
   };
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-gradient-to-br from-brand-50 via-surface to-accent-50">
+    <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-gradient-to-br from-brand-50 via-surface to-accent-50">
       {/* Firefly ambience — sits behind everything else in this container */}
       <FireflyParticles />
 
@@ -291,9 +299,9 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
       </button>
 
       {/* Messages */}
-      <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto px-5 pb-6 pt-16">
+      <div ref={scrollRef} className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 pt-16">
         {messages.length === 0 ? (
-          <div className="mx-auto flex h-full max-w-4xl flex-col items-center justify-center text-center">
+          <div className="mx-auto flex min-h-full max-w-4xl flex-col items-center justify-center text-center">
             <motion.span
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -302,13 +310,13 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
             >
               <Sparkles className="h-7 w-7" aria-hidden />
             </motion.span>
-            <h3 className="mt-6 font-display text-3xl text-ink-strong">
+            <h3 className={cn("mt-6 font-display text-ink-strong", compact ? "text-xl" : "text-3xl")}>
               Assalam-o-Alaikum, <em className="text-ink-muted">{userName.split(" ")[0]}</em>
             </h3>
             <p className="mt-2 max-w-md text-sm leading-relaxed text-ink-muted">
               Ask me anything about {role === "admin" ? "campuses, students, trainers, courses, and classes" : "your students, batches, and classes"} — I&apos;ll pull the data for you instantly.
             </p>
-            <div className="mt-8 grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className={cn("mt-8 grid w-full grid-cols-1 gap-3", !compact && "sm:grid-cols-2")}>
               {prompts.map((p, i) => (
                 <motion.button
                   key={p.title}
@@ -351,7 +359,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
                   )}
                   <div
                     className={cn(
-                      "group min-w-0",
+                      "group min-w-0", Boolean(message.charts?.length) && "w-full",
                       message.role === "user" ? "max-w-[85%] text-right" : "max-w-[92%]",
                     )}
                   >
@@ -370,6 +378,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
                     >
                       {message.role === "assistant" ? <MessageBody content={displayContent} /> : displayContent}
                     </div>
+                    {message.charts?.map((chart) => <div key={chart.id} className="mt-3 w-full"><AiChart chart={chart} /></div>)}
                     {offersDocument && isLatest && (
                       <div className="mt-2.5 flex flex-wrap gap-2">
                         <button
@@ -441,7 +450,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
       </div>
 
       {/* Composer */}
-      <div className="relative z-10 border-t border-edge bg-surface px-5 py-4">
+      <div className={cn("relative z-10 shrink-0 border-t border-edge bg-surface py-4", compact ? "px-3" : "px-5")}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -460,7 +469,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder={`Ask about ${role === "admin" ? "campuses, students, trainers…" : "your students, batches, classes…"}`}
-              className="max-h-36 min-h-[44px] flex-1 resize-none bg-transparent px-3 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:outline-none"
+              className="max-h-36 min-h-[44px] min-w-0 flex-1 resize-none bg-transparent px-3 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:outline-none"
             />
             {messages.length > 0 && (
               <button
@@ -496,7 +505,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
           </div>
           <p className="mt-2 text-center text-[11px] text-ink-muted/80">
             {mode === "live"
-              ? "Connected to Groq — live AI responses with real portal data."
+              ? "Connected — answers and charts use current portal queries."
               : mode === "mock"
                 ? "Offline mode — live AI is temporarily unavailable, so the assistant can't answer or do data entry right now. Your dashboard data is unaffected. Please retry shortly."
                 : "Agent ready — answers are grounded in your portal data."}
@@ -524,7 +533,7 @@ export function AiAssistant({ role }: { role: Extract<UserRole, "admin" | "train
               animate={{ x: 0 }}
               exit={{ x: "-100%" }}
               transition={{ duration: 0.25, ease: "easeOut" }}
-              className="absolute inset-y-0 left-0 z-40 flex w-80 max-w-[85vw] flex-col border-r border-edge bg-surface shadow-2xl"
+              className="absolute inset-y-0 left-0 z-40 flex w-80 max-w-full flex-col border-r border-edge bg-surface shadow-2xl"
               role="dialog"
               aria-label="Chat history"
             >

@@ -1,3 +1,4 @@
+import { DashboardChartBoard } from "@/components/portal/dashboard-chart-board";
 import {
   Building2,
   CalendarCheck,
@@ -22,7 +23,13 @@ import {
   summarizeEnrolmentBuckets,
 } from "@/lib/management-api";
 import { PortalHeading, StatCard } from "@/components/portal/ui";
-import { ChartCard, ChartTable, ColumnChart, DonutChart, MultiTrendArea } from "@/components/portal/charts";
+import {
+  ChartCard,
+  ChartTable,
+  ColumnChart,
+  DonutChart,
+  MultiTrendArea,
+} from "@/components/portal/charts";
 import { ExportReportButton } from "@/components/portal/export-report-button";
 import {
   BRIGHT_BLUE,
@@ -82,19 +89,53 @@ export default async function AdminDashboardPage() {
     getJobPlacementsByCourse(),
     getCampuses(),
   ]);
-  const coursesWithEnrolments = courseEnrolment.filter((c) => c.value > 0).length;
+  const coursesWithEnrolments = courseEnrolment.filter(
+    (c) => c.value > 0,
+  ).length;
   const enrolmentBuckets = summarizeEnrolmentBuckets(statusBreakdown);
-  const totalAssessments = assessmentPerformance.reduce((a, b) => a + b.value, 0);
+  const totalAssessments = assessmentPerformance.reduce(
+    (a, b) => a + b.value,
+    0,
+  );
 
   const cards = [
-    { icon: Building2, label: "Total campuses", value: String(stats.totalCampuses) },
-    { icon: GraduationCap, label: "Total students", value: formatCompact(stats.totalStudents, "") },
+    {
+      icon: Building2,
+      label: "Total campuses",
+      value: String(stats.totalCampuses),
+    },
+    {
+      icon: GraduationCap,
+      label: "Total enrolments",
+      value: formatCompact(stats.totalStudents, ""),
+    },
     { icon: Users, label: "Trainers", value: String(stats.totalTrainers) },
-    { icon: School, label: "Running courses", value: String(stats.runningCourses) },
-    { icon: CalendarClock, label: "Active classes", value: String(stats.activeClasses) },
-    { icon: Wallet, label: "Fees collected", value: formatCompact(fees.totalCollected) },
-    { icon: Receipt, label: "Fees outstanding", value: formatCompact(fees.totalPending), sub: `${fees.pendingCount} pending invoices` },
-    { icon: CalendarCheck, label: "Class check-ins logged", value: attendance.totalClassRecords.toLocaleString() },
+    {
+      icon: School,
+      label: "Running courses",
+      value: String(stats.runningCourses),
+    },
+    {
+      icon: CalendarClock,
+      label: "Active classes",
+      value: String(stats.activeClasses),
+    },
+    {
+      icon: Wallet,
+      label: "Fees collected",
+      value: formatCompact(fees.totalCollected),
+    },
+    {
+      icon: Receipt,
+      label: "Fees outstanding",
+      value: formatCompact(fees.totalPending),
+      sub: `${fees.pendingCount} pending invoices`,
+    },
+    {
+      icon: CalendarCheck,
+      label: "Class check-ins logged",
+      value: attendance.totalClassRecords.toLocaleString(),
+    },
   ];
 
   return (
@@ -105,7 +146,9 @@ export default async function AdminDashboardPage() {
           accent="at a glance"
           description="Live view of every campus, classroom, and rupee Saylani is managing right now."
         />
-        <ExportReportButton campuses={campuses.map((c) => ({ id: c.id, name: c.name }))} />
+        <ExportReportButton
+          campuses={campuses.map((c) => ({ id: c.id, name: c.name }))}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -114,8 +157,7 @@ export default async function AdminDashboardPage() {
         ))}
       </div>
 
-      {/* Row 1 — the two "state of the pipeline" donuts */}
-      <div className="mt-10 grid gap-8 lg:grid-cols-2">
+      <DashboardChartBoard>
         <ChartCard
           title="Enrolment breakdown"
           subtitle="Where every student stands, at a glance — the full status-by-status detail is one click away in the table view"
@@ -127,7 +169,10 @@ export default async function AdminDashboardPage() {
           table={
             <ChartTable
               head={["Status", "Students"]}
-              rows={statusBreakdown.map((s) => [s.label, s.value.toLocaleString()])}
+              rows={statusBreakdown.map((s) => [
+                s.label,
+                s.value.toLocaleString(),
+              ])}
             />
           }
         >
@@ -135,9 +180,21 @@ export default async function AdminDashboardPage() {
             centerLabel="Students"
             format="number"
             data={[
-              { label: "Enrolled", value: enrolmentBuckets[0]?.value ?? 0, color: DONUT_ENROLLED },
-              { label: "Certified", value: enrolmentBuckets[1]?.value ?? 0, color: DONUT_CERTIFIED },
-              { label: "Dropout", value: enrolmentBuckets[2]?.value ?? 0, color: DONUT_DROPOUT },
+              {
+                label: "Enrolled",
+                value: enrolmentBuckets[0]?.value ?? 0,
+                color: DONUT_ENROLLED,
+              },
+              {
+                label: "Certified",
+                value: enrolmentBuckets[1]?.value ?? 0,
+                color: DONUT_CERTIFIED,
+              },
+              {
+                label: "Dropout",
+                value: enrolmentBuckets[2]?.value ?? 0,
+                color: DONUT_DROPOUT,
+              },
             ]}
           />
         </ChartCard>
@@ -153,7 +210,10 @@ export default async function AdminDashboardPage() {
           table={
             <ChartTable
               head={["Outcome", "Submissions"]}
-              rows={assessmentPerformance.map((s) => [s.label, s.value.toLocaleString()])}
+              rows={assessmentPerformance.map((s) => [
+                s.label,
+                s.value.toLocaleString(),
+              ])}
             />
           }
         >
@@ -165,22 +225,27 @@ export default async function AdminDashboardPage() {
               format="number"
               data={assessmentPerformance.map((s) => ({
                 ...s,
-                color: s.label === "Approved" ? DONUT_GREEN : s.label === "Rejected" ? DONUT_RED : DONUT_BLUE,
+                color:
+                  s.label === "Approved"
+                    ? DONUT_GREEN
+                    : s.label === "Rejected"
+                      ? DONUT_RED
+                      : DONUT_BLUE,
               }))}
             />
           )}
         </ChartCard>
-      </div>
 
-      {/* Row 2 — course enrolment, and enrolments vs dropouts over time */}
-      <div className="mt-8 grid gap-8 lg:grid-cols-2">
         <ChartCard
           title="Course enrolment"
           subtitle={`How many students are enrolled on each course · ${coursesWithEnrolments} of ${courseEnrolment.length} courses have anyone enrolled`}
           table={
             <ChartTable
               head={["Course", "Students enrolled"]}
-              rows={courseEnrolment.map((c) => [c.label, c.value.toLocaleString()])}
+              rows={courseEnrolment.map((c) => [
+                c.label,
+                c.value.toLocaleString(),
+              ])}
             />
           }
         >
@@ -205,7 +270,11 @@ export default async function AdminDashboardPage() {
           table={
             <ChartTable
               head={["Month", "Enrolments", "Dropouts"]}
-              rows={enrolVsDropout.map((p) => [p.fullLabel, p.primary.toLocaleString(), p.secondary.toLocaleString()])}
+              rows={enrolVsDropout.map((p) => [
+                p.fullLabel,
+                p.primary.toLocaleString(),
+                p.secondary.toLocaleString(),
+              ])}
             />
           }
         >
@@ -219,14 +288,7 @@ export default async function AdminDashboardPage() {
             smooth
           />
         </ChartCard>
-      </div>
 
-      {/* Row 3 — employment. Genuinely not tracked in the source system today
-          (see getEmploymentTrend/getJobPlacementsByCourse): both queries run
-          for real against student_inductions.status, and will start showing
-          data automatically the moment any record's status becomes
-          placed/hired/employed — no code change needed then. */}
-      <div className="mt-8 grid gap-8 lg:grid-cols-2">
         <ChartCard
           title="Employment trend"
           subtitle="Certified students vs. confirmed job placements, month by month"
@@ -237,7 +299,11 @@ export default async function AdminDashboardPage() {
           table={
             <ChartTable
               head={["Month", "Certified", "Employed"]}
-              rows={employmentTrend.map((p) => [p.fullLabel, p.primary.toLocaleString(), p.secondary.toLocaleString()])}
+              rows={employmentTrend.map((p) => [
+                p.fullLabel,
+                p.primary.toLocaleString(),
+                p.secondary.toLocaleString(),
+              ])}
             />
           }
         >
@@ -263,14 +329,17 @@ export default async function AdminDashboardPage() {
           table={
             <ChartTable
               head={["Course", "Placements"]}
-              rows={jobPlacements.map((c) => [c.label, c.value.toLocaleString()])}
+              rows={jobPlacements.map((c) => [
+                c.label,
+                c.value.toLocaleString(),
+              ])}
             />
           }
         >
           {jobPlacements.length === 0 ? (
             <EmptyChart>
-              No job placements have been recorded yet. Once the training system starts tracking
-              them, this chart populates automatically.
+              No job placements have been recorded yet. Once the training system
+              starts tracking them, this chart populates automatically.
             </EmptyChart>
           ) : (
             <ColumnChart
@@ -284,7 +353,7 @@ export default async function AdminDashboardPage() {
             />
           )}
         </ChartCard>
-      </div>
+      </DashboardChartBoard>
     </>
   );
 }

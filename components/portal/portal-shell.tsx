@@ -25,6 +25,8 @@ import type { Session, UserRole } from "@/types/management";
 import { logout, useSession } from "@/lib/auth";
 import { SaylaniIcon, SaylaniLogo } from "@/components/ui/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AiChatWidget } from "@/components/portal/ai-chat-widget";
+
 import { Avatar } from "@/components/portal/ui";
 import { cn } from "@/lib/utils";
 
@@ -341,6 +343,9 @@ function PortalChrome({
           {children}
         </main>
       </div>
+      {pathname === roleHome[session.role] && (session.role === "admin" || session.role === "trainer") && (
+        <AiChatWidget key={session.userId} role={session.role} />
+      )}
     </div>
   );
 }

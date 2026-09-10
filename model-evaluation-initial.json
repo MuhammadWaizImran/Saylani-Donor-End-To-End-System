@@ -1,0 +1,38 @@
+[
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.8-flash"
+    },
+    "question": "How many unique student profiles and enrolments are there? Explain the difference. Query live data.",
+    "ms": 11764,
+    "error": "gemini/gemini-3.8-flash: HTTP 503"
+  },
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.8-flash"
+    },
+    "question": "Give enrolment counts by campus and explain which is largest. Query current data.",
+    "ms": 3192,
+    "error": "gemini/gemini-3.8-flash: HTTP 429"
+  },
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.8-flash"
+    },
+    "question": "What is the average salary of our placed graduates? Explain whether the data supports this and what would be needed.",
+    "ms": 2023,
+    "error": "gemini/gemini-3.8-flash: HTTP 429"
+  },
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.8-flash"
+    },
+    "question": "Mujhe chart bana ke do.",
+    "ms": 506,
+    "error": "gemini/gemini-3.8-flash: HTTP 429"
+  }
+]

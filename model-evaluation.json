@@ -1,0 +1,95 @@
+[
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.6-flash"
+    },
+    "question": "How many unique student profiles and enrolments are there? Explain the difference. Query live data.",
+    "ms": 10790,
+    "calls": [
+      "get_org_stats",
+      "analyze_enrolments",
+      "query_collection"
+    ],
+    "answer": "### Summary of Findings\n\nBased on live database records as of **September 9, 2026**:\n\n* **Unique Student Profiles:** **102** (`students` collection)\n* **Total Enrolments:** **114** (`student_inductions` collection)\n\n---\n\n### Key Difference Between Profiles and Enrolments\n\n1. **Unique Student Profile (`students` collection):**\n   * Represents an individual person's master record containing identity details such as CNIC/B-Form, full name, email, contact information, and address.\n   * There are **102** distinct individual profiles registered in the system.\n\n2. **Enrolments (`student_inductions` collection):**\n   * Represents a student's registration or application into a specific course/batch (induction).\n   * Because a single student profile can apply to or take more than one course over time, the number of enrolments (**114**) is higher than the number of unique profiles (**102**).\n\n---\n\n### Breakdown of Enrolments by Status\n\n| Enrolment Status | Count |\n| :--- | :--- |\n| Enrolled | 80 |\n| Pending | 21 |\n| Completed | 5 |\n| Passed | 3 |\n| Dropout | 1 |\n| Certified | 1 |\n| Rejected | 1 |\n| Blacklisted | 1 |\n| Approved | 1 |\n| **Total Enrolments** | **114** |\n\n---\n\n### Suggested Next Actions\n* If you would like to see enrolments broken down by campus, course, or month, let me know or ask for a visualization (e.g., a bar chart showing enrolments per campus)."
+  },
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.6-flash"
+    },
+    "question": "Give enrolment counts by campus and explain which is largest. Query current data.",
+    "ms": 57682,
+    "calls": [
+      "analyze_enrolments",
+      "describe_schema",
+      "query_collection"
+    ],
+    "answer": "### Scope of Query\nWe queried current data across all 114 enrolment records in the database (`student_inductions`).\n\n---\n\n### Enrolment Breakdown by Campus\n\n| Campus | Enrolment Count | Share of Total |\n| :--- | :---: | :---: |\n| **Bahdurabad** | **61** | **53.5%** |\n| ZA - Zaitoon Ashraf | 36 | 31.6% |\n| *(not set)* | 6 | 5.3% |\n| Aliabad | 4 | 3.5% |\n| Saeen Goth | 4 | 3.5% |\n| Shahi Bazaar | 2 | 1.8% |\n| Clock Tower | 1 | 0.9% |\n| **Total** | **114** | **100%** |\n\n---\n\n### Key Findings\n* **Largest Campus**: **Bahdurabad** is the largest campus, holding **61 enrolments** (more than 53% of all active and recorded enrolments).\n* **Second Largest**: **ZA - Zaitoon Ashraf** follows with **36 enrolments**.\n\n---\n\n### Limitations\n1. **Enrolments vs. Unique Students**: These counts measure course enrolments (`student_inductions`). A single student enrolled in multiple courses is counted once per enrolment.\n2. **Unassigned Records**: 6 enrolment records currently do not have a campus specified (`(not set)`).\n\n---\n\n### Suggested Next Actions\n* **Filter by Status**: View active, completed, or dropped-out enrolments per campus.\n* **Course Breakdown**: Analyze which specific courses are driving high enrolment numbers at the Bahdurabad campus."
+  },
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.6-flash"
+    },
+    "question": "What is the average salary of our placed graduates? Explain whether the data supports this and what would be needed.",
+    "ms": 18011,
+    "calls": [
+      "get_org_stats",
+      "describe_schema",
+      "describe_schema"
+    ],
+    "answer": "### Calculation of Average Placement Salary\n\nThe database **does not support** calculating or providing the average salary of placed graduates. Placements, verified employment status, and actual graduate salaries are not tracked or recorded in the system.\n\n---\n\n### Why the Data Does Not Support This\n\n1. **No Graduate Placement Records:** There is no collection or field linking graduated students to confirmed employment, hiring organizations, or actual starting salaries.\n2. **Job Postings vs. Placements:** The existing `jobs` collection contains advertised job vacancies (posting details such as job titles, companies, and offered salary ranges), but **job postings are not job placements**. They do not confirm which students applied, received job offers, or accepted positions.\n\n---\n\n### What Would Be Needed\n\nTo accurately report average graduate placement salaries in the future, the system would require:\n\n* **Placement / Hires Collection:** A dedicated tracking table linking student profiles (`student_id` / `user_id`) to employment outcomes.\n* **Salary Fields:** Standardized fields for verified starting salary (e.g., base PKR amount, currency, employment type).\n* **Placement Status & Dates:** Standardized indicators for confirmed employment (e.g., placed, self-employed, seeking employment) along with hire dates and company details.\n\n---\n\n### Related Available Evidence\n\n* **Job Vacancies (`jobs` collection):** Details on current open job postings advertised to students, including company names, job titles, and advertised standard salary ranges (`salary.min` and `salary.max`).\n* **Graduate / Completion Counts (`student_inductions`):** Number of student enrolments with status `passed` or `completed` across courses and campuses.\n\n---\n\n### Next Action\nIf you would like to analyze open job postings and their advertised salary ranges or review completion counts by course/campus, let me know!"
+  },
+  {
+    "target": {
+      "provider": "gemini",
+      "model": "gemini-3.6-flash"
+    },
+    "question": "Mujhe chart bana ke do.",
+    "ms": 3639,
+    "calls": [],
+    "answer": "Aap kis cheez ka chart banana chahte hain? Rehnumaai ke liye yeh tafseelat bata dein:\n\n1. **Metric (Paimana):** Enrolments, fee payments, donations, wagaira?\n2. **Grouping / Date Range:** Mahana (monthly), course-wise, campus-wise, ya status-wise?\n3. **Chart Type:** \n   - **Bar Chart** (Muqabla / Comparisons ke liye - Recommended)\n   - **Line Chart** (Waqt ke sath trend dekhne ke liye)\n   - **Pie Chart** (Taqseem / Distribution dekhne ke liye)\n\n*(Aap koi aik chun sakte hain, maslan: **\"Courses ke hisab se student enrolments ka bar chart bana do\"**)*"
+  },
+  {
+    "target": {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b"
+    },
+    "question": "How many unique student profiles and enrolments are there? Explain the difference. Query live data.",
+    "ms": 3017,
+    "error": "groq/openai/gpt-oss-120b: HTTP 413"
+  },
+  {
+    "target": {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b"
+    },
+    "question": "Give enrolment counts by campus and explain which is largest. Query current data.",
+    "ms": 2956,
+    "calls": [
+      "analyze_enrolments"
+    ],
+    "answer": "**Enrolment counts by campus (current data)**  \n\n| Campus                | Enrolments |\n|-----------------------|------------|\n| Bahdurabad            | 61 |\n| ZA – Zaitoon Ashraf   | 36 |\n| (not set)             | 6 |\n| Aliabad               | 4 |\n| Saeen Goth            | 4 |\n| Shahi Bazaar          | 2 |\n| Clock Tower           | 1 |\n\n**Which campus is largest?**  \n- **Bahdurabad** has the highest enrolment count with **61** students, making it the largest campus in terms of enrolments.\n\n**Scope & limitations**  \n- The counts come directly from the `student_inductions` collection, grouped by the `campus` field.  \n- All matching enrolments (114 total) are included; no sampling was applied.  \n- The “(not set)” campus represents records where the campus field was empty or missing.  \n\n**Next useful action**  \n- If you need a visual comparison, I can create a bar chart of these counts. Let me know if you’d like that."
+  },
+  {
+    "target": {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b"
+    },
+    "question": "What is the average salary of our placed graduates? Explain whether the data supports this and what would be needed.",
+    "ms": 2063,
+    "calls": [],
+    "answer": "**Scope of the query**  \nYou asked for the *average salary of placed graduates* – i.e., the mean of the salary amounts that our alumni report after they have been placed in a job.\n\n**What the database actually contains**  \n- The system tracks **placements** (students who have secured a job) but it does **not store any salary field** for those placements.  \n- The `list_placed_students` tool can return the list of graduates who have been placed, but the records only include the job title, employer, placement date, and status – no compensation data.  \n- The `get_org_stats` tool provides high‑level counts (e.g., total placements) but explicitly does **not** calculate or store average salary, average progress, or average attendance.\n\n**Result**  \nBecause there is **no salary column** in any placement‑related collection, the database cannot compute an average salary. Any number that might be quoted would be an estimate, not evidence‑driven, and would violate the evidence‑first policy.\n\n**What would be needed to answer the question**  \n1. **A salary field** (e.g., `salary_pkrs`) added to the placement record (or a separate “placement_outcomes” collection) that captures the graduate’s reported salary in PKR.  \n2. **Consistent data entry** – each placed graduate must have that field filled, preferably with validation (numeric, currency).  \n3. Optionally, a **date field** (e.g., `salary_report_date`) to allow time‑based analysis (salary trends over months/years).  \n4. Once those fields exist, we could run a query such as:\n\n```json\n{\n  \"collection\": \"placements\",\n  \"filter\": { \"status\": \"placed\" },\n  \"sum_field\": \"salary_pkrs\",\n  \"group_by\": null   // to get total sum and count, then compute average\n}\n```\n\nor use a specialized analytics tool if one is added for salary aggregation.\n\n**Conclusion**  \n- **Current data does not support** calculating an average salary for placed graduates.  \n- To obtain this metric, the organization must start capturing salary information in the placement records (or a related collection) and ensure the data is consistently populated. Once that is in place, a straightforward aggregation can provide the average salary."
+  },
+  {
+    "target": {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b"
+    },
+    "question": "Mujhe chart bana ke do.",
+    "ms": 876,
+    "calls": [],
+    "answer": "Sure! To create a useful chart I need a little more detail:\n\n1. **Metric** – What do you want to see? (e.g., number of student enrolments, fee payments, donations, attendance, etc.)  \n2. **Grouping** – How should the data be broken down? (by month, campus, course, trainer, etc.)  \n3. **Date range** – Any specific start‑end dates?  \n4. **Chart type** – Bar (comparisons), line (trend over time), pie (share of a few parts), or table.\n\nGive me these four points (you can skip any you don’t care about) and I’ll generate the chart for you."
+  }
+]

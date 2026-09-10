@@ -34,6 +34,7 @@ import {
 } from "@/lib/ai/schema-map";
 import { mongo } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
+import { observedFields } from "./live-schema";
 
 /** String id → ObjectId when it looks like one, else the raw string. */
 const oid = (id: string): ObjectId | string => (/^[a-f0-9]{24}$/i.test(id) ? new ObjectId(id) : id);
@@ -98,6 +99,7 @@ export const toolDefinitions = [
           sort_by: { type: ["string", "null"], description: "Field to sort rows by." },
           sort_dir: { type: ["string", "null"], enum: ["asc", "desc", null], description: "Default desc." },
           limit: { type: ["number", "null"], description: "1-50, default 20." },
+          count_only: {type:"boolean",description:"Return the exact matching document count without sending individual records. Use for total profiles or other counts."},
         },
         required: ["collection"],
       },
@@ -109,7 +111,7 @@ export const toolDefinitions = [
     function: {
       name: "get_org_stats",
       description:
-        "Organization-wide totals: campuses, students, trainers, running courses, active classes. Placements, average salary, average progress, and average attendance are NOT tracked in the database — this tool does not return them and you must never estimate them.",
+        "Exact organization totals in ONE call: unique_student_profiles (students collection), total_enrolments (student_inductions), campuses, trainers, running courses, active classes. Use this for profile/enrolment totals without further list queries. No placement salaries or attendance percentages.",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -144,6 +146,8 @@ export const toolDefinitions = [
             enum: ["dropout_date", "enrollment_date", "createdAt"],
             description: "Which date drives month grouping. Default createdAt.",
           },
+          start_date: { type:"string", description:"Optional inclusive lower date YYYY-MM-DD, applied to date_field." },
+          end_date: { type:"string", description:"Optional inclusive upper date YYYY-MM-DD, applied to date_field." },
         },
         required: ["group_by"],
       },
@@ -808,11 +812,19 @@ export async function executeTool(
         // indexed filter is a lookup, an unindexed one scans the collection.
         const relations = [...(RELATIONS[wanted] ?? []), ...(found.info.relations ?? [])];
         const indexes = INDEXES[wanted];
+        const privateCollection = ["users", "revoked_sessions", "agent_conversations", "reports.files", "agendaJobs"].includes(wanted);
+        const liveFields = privateCollection ? {} : await observedFields(wanted);
+        const statuses = !privateCollection && Object.hasOwn(liveFields,"status")
+          ? await db.collection(wanted).aggregate([{$group:{_id:"$status",count:{$sum:1}}},{$sort:{count:-1}},{$limit:30}]).toArray()
+          : [];
         return JSON.stringify({
           collection: wanted,
           domain: found.domain,
           purpose: found.info.purpose,
-          approx_documents: found.info.approxDocs,
+          document_count: privateCollection || ctx.role!=="admin" ? undefined : await db.collection(wanted).countDocuments(),
+          observed_fields: liveFields,
+          observed_statuses: ctx.role==="admin" ? statuses : statuses.map(s=>s._id),
+          schema_note: "Field types sampled from up to 20 current records; status counts are live. Legacy notes below may be outdated: prefer observed values.",
           fields: { ...found.info.fields, ...UNIVERSAL_FIELDS },
           ...(relations.length ? { relations } : {}),
           indexes: indexes ?? "None beyond _id — any filter here scans the whole collection. Fine at this size, but prefer an indexed field when one exists.",
@@ -860,8 +872,8 @@ export async function executeTool(
           `No collection named "${collection}". Call describe_schema with no arguments to see what exists.`,
         );
       }
-      if (found.info.approxDocs === 0) {
-        return JSON.stringify({ collection, rows: [], note: "This collection is empty." });
+      if (["users", "revoked_sessions", "agent_conversations", "reports.files", "agendaJobs"].includes(collection)) {
+        return err("This private system collection is not available for general AI queries.");
       }
 
       /* Admin-only domains. These hold staff accounts, privilege structure,
@@ -876,6 +888,10 @@ export async function executeTool(
       const limit = Math.min(50, Math.max(1, Number(args.limit ?? 20) || 20));
       const groupBy = argStr(args, "group_by");
       const sumField = argStr(args, "sum_field");
+      const liveFields = await observedFields(collection);
+      const knownField = (field: string) => (Object.hasOwn(liveFields, field) || Object.hasOwn(found.info.fields, field) || Object.hasOwn(UNIVERSAL_FIELDS, field)) && Object.hasOwn(redact({[field]:true}),field);
+      if (groupBy && groupBy !== "__month" && !knownField(groupBy)) return err("Unknown grouping field. Check describe_schema first.");
+      if (sumField && !knownField(sumField)) return err("Unknown sum field. Check describe_schema first.");
 
       /* Equality filters only. A 24-char hex value is matched as either an
          ObjectId or the same string, since this database stores foreign keys
@@ -883,6 +899,7 @@ export async function executeTool(
       const match: Record<string, unknown> = {};
       const rawFilter = (typeof args.filter === "object" && args.filter ? args.filter : {}) as Record<string, unknown>;
       for (const [k, v] of Object.entries(rawFilter)) {
+        if (!knownField(k) || (v !== null && !["string", "number", "boolean"].includes(typeof v))) return err("Only known fields with scalar equality values are allowed.");
         if (k.startsWith("$")) return err(`Filter field "${k}" is not allowed — use plain field names.`);
         match[k] = typeof v === "string" && /^[a-f0-9]{24}$/i.test(v) ? idEq(v) : v;
       }
@@ -907,9 +924,12 @@ export async function executeTool(
         } else if (collection === "students" || collection === "student_inductions") {
           match._id = { $in: [] }; // handled by the dedicated student tools
           return err("Use list_students — it already scopes students to you.");
+        } else {
+          return err("This collection cannot be safely scoped to your trainer account. Use your dedicated student/course/class tools.");
         }
       }
 
+      if(args.count_only===true)return JSON.stringify({collection,matched:await db.collection(collection).countDocuments(match),evidence:evidence([collection],match)});
       if (groupBy) {
         const groupField =
           groupBy === "__month"
@@ -944,6 +964,7 @@ export async function executeTool(
       }
 
       const sortBy = argStr(args, "sort_by");
+      if (sortBy && !knownField(sortBy)) return err("Unknown sort field. Check describe_schema first.");
       const sortDir = argStr(args, "sort_dir") === "asc" ? 1 : -1;
       const rows = await db
         .collection(collection)
@@ -970,7 +991,8 @@ export async function executeTool(
       const st = await getOrgStats();
       return JSON.stringify({
         total_campuses: st.totalCampuses,
-        total_students: st.totalStudents,
+        total_enrolments: st.totalStudents,
+        unique_student_profiles: await db.collection("students").countDocuments(),
         total_trainers: st.totalTrainers,
         running_courses: st.runningCourses,
         active_classes: st.activeClasses,
@@ -1030,6 +1052,17 @@ export async function executeTool(
       }
 
       const groupId: Record<string, unknown> = { a: dimExpr(groupBy) };
+      const startDate=argStr(args,"start_date"),endDate=argStr(args,"end_date");
+      const dateTests:Record<string,unknown>[]=[];
+      for(const [raw,lower] of [[startDate,true],[endDate,false]] as const){
+        if(!raw)continue;
+        const date=new Date(raw+"T00:00:00.000Z");
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(raw)||!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==raw)return err("Dates must be valid YYYY-MM-DD values.");
+        if(!lower)date.setUTCDate(date.getUTCDate()+1);
+        dateTests.push({[lower?"$gte":"$lt"]:[{$convert:{input:`$${dateField}`,to:"date",onError:null,onNull:null}},date]});
+      }
+      if(startDate&&endDate&&startDate>endDate)return err("start_date must be on or before end_date.");
+      if(dateTests.length)match.$expr={$and:[{$ne:[{$convert:{input:`$${dateField}`,to:"date",onError:null,onNull:null}},null]},...dateTests]};
       if (thenBy && (DIM_FIELD[thenBy] || thenBy === "month")) groupId.b = dimExpr(thenBy);
 
       const rows = await db
@@ -1070,8 +1103,12 @@ export async function executeTool(
           status: statusFilter || null,
           course: argStr(args, "course") || null,
           campus: argStr(args, "campus") || null,
+          start_date: startDate || null,
+          end_date: endDate || null,
         },
-        total_matching_enrolments: out.reduce((sum, r) => sum + r.count, 0),
+        total_matching_enrolments: await db.collection("student_inductions").countDocuments(match),
+        enrolments_in_returned_groups: out.reduce((sum, r) => sum + r.count, 0),
+        group_limit: 100,
         rows: out,
       });
     }

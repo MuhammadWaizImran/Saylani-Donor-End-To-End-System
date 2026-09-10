@@ -1,0 +1,49 @@
+{
+  "ms": 3221,
+  "model": "openai/gpt-oss-120b",
+  "provider": "groq",
+  "mode": "live",
+  "content": "**Enrolments by campus**\n\n| Campus                | Enrolments |\n|-----------------------|------------|\n| Bahdurabad            | 61 |\n| ZA – Zaitoon Ashraf   | 36 |\n| (not set)             | 6 |\n| Saeen Goth            | 4 |\n| Aliabad               | 4 |\n| Shahi Bazaar          | 2 |\n| Clock Tower           | 1 |\n\n**Difference:** Bahdurabad has the most enrolments, **25 more** than the next‑largest campus (ZA – Zaitoon Ashraf).  \n\nA bar chart visualising these numbers is available in your dashboard (chart ID 6aa28e524a9ea89938717304).\n\n---\nSource: current database queries (analyze_enrolments).",
+  "charts": [
+    {
+      "id": "6aa28e524a9ea89938717304",
+      "title": "Enrolments by Campus",
+      "type": "bar",
+      "label": "campus",
+      "metric": "count",
+      "rows": [
+        {
+          "label": "Bahdurabad",
+          "value": 61
+        },
+        {
+          "label": "ZA - Zaitoon Ashraf",
+          "value": 36
+        },
+        {
+          "label": "(not set)",
+          "value": 6
+        },
+        {
+          "label": "Saeen Goth",
+          "value": 4
+        },
+        {
+          "label": "Aliabad",
+          "value": 4
+        },
+        {
+          "label": "Shahi Bazaar",
+          "value": 2
+        },
+        {
+          "label": "Clock Tower",
+          "value": 1
+        }
+      ],
+      "source": "analyze_enrolments",
+      "generatedAt": "2026-09-10T11:02:42.194Z",
+      "note": "Snapshot of returned query rows; query limits apply. Ask for a new chart to refresh. Filters: {\"status\":null,\"course\":null,\"campus\":null,\"start_date\":null,\"end_date\":null}."
+    }
+  ]
+}

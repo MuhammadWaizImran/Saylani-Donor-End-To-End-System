@@ -8,10 +8,12 @@
  * fails entirely, it says so plainly rather than inventing an answer.
  */
 import { AI_UNAVAILABLE_MESSAGE, type AgentContext } from "@/lib/ai/context";
+import type { ChartSpec } from "./chart-spec";
 
 export type { AgentContext };
 
 export interface ChatMessage {
+  charts?: ChartSpec[];
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -33,6 +35,9 @@ export interface AgentStep {
 }
 
 export interface AgentReply {
+  charts?: ChartSpec[];
+  model?: string;
+  provider?: string;
   content: string;
   mode: AgentMode;
   /** True when the agent created, edited, or deleted a record this turn —
@@ -89,6 +94,9 @@ export async function askAgent(
             mode: evt.mode ?? "mock",
             mutated: evt.mutated,
             conversationId: evt.conversationId,
+            charts: evt.charts,
+            model: evt.model,
+            provider: evt.provider,
             steps,
           };
         } else {
@@ -130,13 +138,14 @@ export async function loadConversation(id: string): Promise<ChatMessage[] | null
     const res = await fetch(`/api/chat/conversations/${id}`);
     if (!res.ok) return null;
     const data = (await res.json()) as {
-      messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string }>;
+      messages: Array<{ role: "user" | "assistant"; content: string; createdAt: string; charts?: ChartSpec[] }>;
     };
     return data.messages.map((m, i) => ({
       id: `${id}-${i}`,
       role: m.role,
       content: m.content,
       createdAt: m.createdAt,
+      charts: m.charts,
     }));
   } catch {
     return null;

@@ -1,12 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  Banknote,
-  Building2,
-  GraduationCap,
-  Layers,
-} from "lucide-react";
+import { DashboardChartBoard } from "@/components/portal/dashboard-chart-board";
+import { Banknote, Building2, GraduationCap, Layers } from "lucide-react";
 import type { Course, Student, Trainer } from "@/types/management";
 import { useSession } from "@/lib/auth";
 import {
@@ -35,7 +31,9 @@ export default function TrainerDashboardPage() {
     if (!session) return;
     let cancelled = false;
     fetch("/api/portal/trainer")
-      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((res) =>
+        res.ok ? res.json() : Promise.reject(new Error(String(res.status))),
+      )
       .then((payload: DashboardData) => {
         if (!cancelled) setData(payload);
       })
@@ -63,13 +61,23 @@ export default function TrainerDashboardPage() {
   }
 
   const { trainer, campusName, courses, students } = data;
-  const activeStudents = students.filter((s) => s.enrollmentStatus === "active");
+  const activeStudents = students.filter(
+    (s) => s.enrollmentStatus === "active",
+  );
 
   const cards = [
     { icon: Building2, label: "Assigned campus", value: campusName },
-    { icon: GraduationCap, label: "Your students", value: String(trainer.studentCount) },
+    {
+      icon: GraduationCap,
+      label: "Your students",
+      value: String(trainer.studentCount),
+    },
     { icon: Layers, label: "Class slots", value: String(trainer.batchesCount) },
-    { icon: Banknote, label: "Hourly rate", value: formatCompact(trainer.salary) },
+    {
+      icon: Banknote,
+      label: "Hourly rate",
+      value: formatCompact(trainer.salary),
+    },
   ];
 
   return (
@@ -92,22 +100,41 @@ export default function TrainerDashboardPage() {
         ))}
       </div>
 
+      <DashboardChartBoard />
+
       <section aria-labelledby="trainer-courses-heading" className="mt-10">
-        <h2 id="trainer-courses-heading" className="mb-4 font-display text-xl text-ink-strong">
+        <h2
+          id="trainer-courses-heading"
+          className="mb-4 font-display text-xl text-ink-strong"
+        >
           Courses you&apos;re teaching
         </h2>
         <div className="grid gap-5 md:grid-cols-2">
           {courses.map((c) => (
-            <article key={c.id} className="portal-glow rounded-2xl border border-edge bg-surface p-5">
+            <article
+              key={c.id}
+              className="portal-glow rounded-2xl border border-edge bg-surface p-5"
+            >
               <div className="flex items-center justify-between gap-3">
-                <h3 className="font-display text-lg text-ink-strong">{c.name}</h3>
-                <Pill tone={c.status === "running" ? "green" : c.status === "completed" ? "dark" : "gray"}>
+                <h3 className="font-display text-lg text-ink-strong">
+                  {c.name}
+                </h3>
+                <Pill
+                  tone={
+                    c.status === "running"
+                      ? "green"
+                      : c.status === "completed"
+                        ? "dark"
+                        : "gray"
+                  }
+                >
                   {c.status}
                 </Pill>
               </div>
               <p className="mt-1 text-xs text-ink-muted">
                 {c.enrolledCount} enrolled
-                {c.durationMonths > 0 ? ` · ${c.durationMonths} months` : ""} · started {c.startedAt}
+                {c.durationMonths > 0 ? ` · ${c.durationMonths} months` : ""} ·
+                started {c.startedAt}
               </p>
             </article>
           ))}
@@ -115,8 +142,14 @@ export default function TrainerDashboardPage() {
       </section>
 
       <section aria-labelledby="trainer-students-heading" className="mt-10">
-        <h2 id="trainer-students-heading" className="mb-4 font-display text-xl text-ink-strong">
-          Your students <span className="font-sans text-sm text-ink-muted">({activeStudents.length} active)</span>
+        <h2
+          id="trainer-students-heading"
+          className="mb-4 font-display text-xl text-ink-strong"
+        >
+          Your students{" "}
+          <span className="font-sans text-sm text-ink-muted">
+            ({activeStudents.length} active)
+          </span>
         </h2>
         <TableShell minWidth={640}>
           <thead>
@@ -137,7 +170,9 @@ export default function TrainerDashboardPage() {
                 </Td>
                 <Td className="text-ink-muted">{s.courseName}</Td>
                 <Td>
-                  <Pill tone={s.enrollmentStatus === "active" ? "green" : "red"}>
+                  <Pill
+                    tone={s.enrollmentStatus === "active" ? "green" : "red"}
+                  >
                     {s.enrollmentStatus}
                   </Pill>
                 </Td>

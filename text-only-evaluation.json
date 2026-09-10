@@ -1,0 +1,8 @@
+{
+  "ms": 4226,
+  "model": "openai/gpt-oss-120b",
+  "provider": "groq",
+  "mode": "live",
+  "content": "**Campuses ranked by enrolments**\n\n| Rank | Campus                | Enrolments |\n|------|----------------------|------------|\n| 1    | Bahdurabad           | 61 |\n| 2    | ZA – Zaitoon Ashraf   | 36 |\n| 3    | (not set)            | 6 |\n| 4    | Aliabad              | 4 |\n| 5    | Saeen Goth           | 4 |\n| 6    | Shahi Bazaar         | 2 |\n| 7    | Clock Tower          | 1 |\n\nAll 114 enrolments in the system are accounted for, so this ranking reflects the complete data.\n\n---\nSource: current database queries (analyze_enrolments).",
+  "charts": []
+}

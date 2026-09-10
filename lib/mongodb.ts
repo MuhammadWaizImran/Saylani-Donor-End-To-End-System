@@ -21,7 +21,12 @@ export function mongo(): Promise<Db> {
     if (!uri) {
       throw new Error("MongoDB not configured — set MONGODB_URI in .env.local");
     }
-    dbPromise = new MongoClient(uri).connect().then((client) => client.db());
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 15000, maxPoolSize: 20 });
+    dbPromise = client.connect().then((connected) => connected.db()).catch(async (error) => {
+      dbPromise = null;
+      await client.close().catch(() => undefined);
+      throw error;
+    });
   }
   return dbPromise;
 }
