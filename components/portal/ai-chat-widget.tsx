@@ -91,7 +91,7 @@ export function AiChatWidget({ role }: { role: Extract<UserRole, "admin" | "trai
               </button>
             </div>
           </header>
-          <div className="min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <AiAssistant ref={assistant} role={role} compact={!expanded} />
           </div>
         </section>

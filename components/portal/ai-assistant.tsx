@@ -159,6 +159,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
   const [mode, setMode] = useState<AgentMode | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
   const idCounter = useRef(0);
 
   /* ── chat history panel ────────────────────────────────────── */
@@ -182,6 +183,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
     setResumingId(id);
     const loaded = await loadConversation(id);
     if (loaded) {
+      followLatest.current = true;
       setMessages(loaded);
       setConversationId(id);
       setMode(null);
@@ -191,6 +193,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
   };
 
   const startNewConversation = () => {
+    followLatest.current = true;
     setMessages([]);
     setConversationId(null);
     setMode(null);
@@ -200,7 +203,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
   const userName = session?.name ?? "there";
 
   useEffect(() => {
-    if (messages.length > 0) {
+    if (messages.length > 0 && followLatest.current) {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     }
   }, [messages, thinking]);
@@ -208,6 +211,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
   const send = async (text: string): Promise<string | null> => {
     const trimmed = text.trim();
     if (!trimmed || thinking || !session) return null;
+    followLatest.current = true;
     const userMessage: ChatMessage = {
       id: `m-${++idCounter.current}`,
       role: "user",
@@ -284,7 +288,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
   };
 
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-gradient-to-br from-brand-50 via-surface to-accent-50">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-gradient-to-br from-brand-50 via-surface to-accent-50">
       {/* Firefly ambience — sits behind everything else in this container */}
       <FireflyParticles />
 
@@ -300,7 +304,17 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
       </button>
 
       {/* Messages */}
-      <div ref={scrollRef} className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 pt-16">
+      <div
+        ref={scrollRef}
+        role="region"
+        aria-label="Chat messages"
+        tabIndex={0}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          followLatest.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+        className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 pt-16 [scrollbar-gutter:stable]"
+      >
         {messages.length === 0 ? (
           <div className="mx-auto flex min-h-full max-w-4xl flex-col items-center justify-center text-center">
             <motion.span
@@ -562,7 +576,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
                 New conversation
               </button>
 
-              <div className="mt-2 flex-1 overflow-y-auto px-3 pb-4">
+              <div className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
                 {historyLoading ? (
                   <p className="px-2 py-6 text-center text-sm text-ink-muted">Loading…</p>
                 ) : history.length === 0 ? (

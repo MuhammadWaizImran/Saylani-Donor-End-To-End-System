@@ -189,7 +189,7 @@ function PortalChrome({
   );
 
   return (
-    <div className="mx-auto flex min-h-svh w-full">
+    <div className={cn("mx-auto flex w-full", isFullBleed ? "h-dvh overflow-hidden" : "min-h-svh")}>
       {/* Desktop sidebar — expanded */}
       {sidebarOpen ? (
         <aside className="sticky top-0 hidden h-svh w-64 shrink-0 flex-col bg-gradient-to-br from-brand-100 via-brand-50 to-accent-100 px-4 py-6 shadow-[14px_0_36px_-22px_rgba(11,115,183,0.55)] lg:flex">
@@ -286,9 +286,9 @@ function PortalChrome({
         </aside>
       )}
 
-      <div className="flex min-h-svh min-w-0 flex-1 flex-col bg-gradient-to-r from-brand-100/40 via-transparent via-30% to-transparent">
+      <div className={cn("flex min-w-0 flex-1 flex-col bg-gradient-to-r from-brand-100/40 via-transparent via-30% to-transparent", isFullBleed ? "min-h-0" : "min-h-svh")}>
         {/* Portal topbar */}
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-brand-100 bg-gradient-to-r from-brand-50 via-surface to-accent-50 px-6 py-4">
+        <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-3 border-b border-brand-100 bg-gradient-to-r from-brand-50 via-surface to-accent-50 px-6 py-4">
           <div className="flex items-center gap-3">
             <button
               type="button"
