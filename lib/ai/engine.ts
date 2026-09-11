@@ -1,6 +1,6 @@
 import { visualizationHint } from "./visualization-policy";
 import { buildSystemPrompt } from "./prompt";
-import { callModel, type ModelMessage } from "./providers";
+import { callModel, createProviderSession, type ModelMessage } from "./providers";
 import { executeTool } from "./tools";
 import type { ChartSpec } from "./chart-spec";
 import { initialTools } from "./tool-selection";
@@ -24,6 +24,7 @@ export async function runAgent(
   signal?: AbortSignal,
 ) {
   const evidence = new Map<string, QueryEvidence>();
+  const providerSession = createProviderSession();
   const charts: ChartSpec[] = [];
   const sources = new Set<string>();
   const thread: ModelMessage[] = [
@@ -48,7 +49,7 @@ export async function runAgent(
     });
     let reply: Awaited<ReturnType<typeof callModel>>;
     try {
-      reply = await callModel(thread, definitions, signal);
+      reply = await callModel(thread, definitions, signal, providerSession);
     } catch (error) {
       if (!charts.length && !mutated) throw error;
       return {

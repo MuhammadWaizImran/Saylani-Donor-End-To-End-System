@@ -234,6 +234,7 @@ export function AiAssistant({ role, compact = false, ref }: { role: Extract<User
           id: `m-${++idCounter.current}-a`,
           role: "assistant",
           content: reply.content,
+          failed: reply.failed,
           createdAt: new Date().toISOString(),
           steps: reply.steps,
           charts: reply.charts,

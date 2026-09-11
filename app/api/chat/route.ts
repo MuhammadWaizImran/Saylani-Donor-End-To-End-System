@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getSessionUser } from "@/lib/auth-server";
 import { saveTurn } from "@/lib/ai/chat-store";
 import { runAgent } from "@/lib/ai/engine";
+import { providerErrorMessage } from "@/lib/ai/providers";
 
 export const maxDuration = 300;
 const schema = z.object({
@@ -74,11 +75,8 @@ export async function POST(req: Request) {
       const reason = (error as Error).message;
       console.warn("[AI]", reason);
       return {
-        content: /429/.test(reason)
-          ? "The AI providers are currently rate-limited or out of quota. Please try again shortly, or increase the API quota. I have not completed this answer and will not guess database figures."
-          : /timed out/.test(reason)
-            ? "The AI service took too long to respond. Please retry with a narrower question."
-            : "The AI service is unavailable right now. I could not complete this analysis; please retry. No figures have been guessed.",
+        content: providerErrorMessage(error),
+        failed: true,
         mode: "mock",
         mutated: false,
         charts: [],

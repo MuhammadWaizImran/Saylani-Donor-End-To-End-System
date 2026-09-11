@@ -13,6 +13,7 @@ import type { ChartSpec } from "./chart-spec";
 export type { AgentContext };
 
 export interface ChatMessage {
+  failed?: boolean;
   charts?: ChartSpec[];
   id: string;
   role: "user" | "assistant";
@@ -35,6 +36,7 @@ export interface AgentStep {
 }
 
 export interface AgentReply {
+  failed?: boolean;
   charts?: ChartSpec[];
   model?: string;
   provider?: string;
@@ -62,7 +64,7 @@ export async function askAgent(
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
       body: JSON.stringify({
-        messages: history.map((m) => ({ role: m.role, content: m.content })),
+        messages: history.filter((m) => !m.failed).slice(-12).map((m) => ({ role: m.role, content: m.content })),
         role: ctx.role,
         userName: ctx.userName,
         userEmail: ctx.userEmail,
@@ -91,6 +93,7 @@ export async function askAgent(
         if (evt.type === "done") {
           done = {
             content: evt.content ?? AI_UNAVAILABLE_MESSAGE,
+            failed: evt.failed,
             mode: evt.mode ?? "mock",
             mutated: evt.mutated,
             conversationId: evt.conversationId,
@@ -107,9 +110,9 @@ export async function askAgent(
       }
     }
 
-    return done ?? { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", steps };
+    return done ?? { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", failed: true, steps };
   } catch {
-    return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock" };
+    return { content: AI_UNAVAILABLE_MESSAGE, mode: "mock", failed: true };
   }
 }
 
