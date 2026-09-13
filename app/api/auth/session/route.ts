@@ -1,8 +1,5 @@
-import { NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth-server";
+import { forwardToBackend } from "@/lib/backend-proxy";
 
-/** Lets the client-side reactive session store read the httpOnly cookie. */
-export async function GET(req: Request) {
-  const session = await getSessionUser(req);
-  return NextResponse.json({ session });
-}
+export const runtime = "nodejs";
+export const maxDuration = 300;
+export const GET = forwardToBackend;

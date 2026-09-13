@@ -1,0 +1,56 @@
+import { GridFSBucket, ObjectId } from "mongodb";
+import { mongo } from "@/lib/mongodb";
+import { getSessionUser } from "@/backend/auth/session";
+
+/**
+ * Serves an AI-generated Word report from MongoDB GridFS. Session-gated to
+ * the same roles that can generate reports (admin/trainer).
+ */
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getSessionUser(req);
+  if (!session || (session.role !== "admin" && session.role !== "trainer")) {
+    return Response.json({ error: "Not authorized" }, { status: 403 });
+  }
+
+  const { id } = await params;
+  if (!/^[a-f0-9]{24}$/i.test(id)) {
+    return Response.json({ error: "Invalid report id" }, { status: 400 });
+  }
+
+  const db = await mongo();
+  const _id = new ObjectId(id);
+  const file = await db.collection("reports.files").findOne({ _id });
+  if (!file) {
+    return Response.json({ error: "Report not found" }, { status: 404 });
+  }
+
+  // Ownership check — a report belongs to the user who generated it. GridFS
+  // ids are sequential/guessable, so role-gating alone would let any admin or
+  // trainer pull anyone else's export. 404 (not 403) so a probing user can't
+  // even tell whether an id exists. Legacy files with no ownerId are denied.
+  if (file.metadata?.ownerId !== session.userId) {
+    return Response.json({ error: "Report not found" }, { status: 404 });
+  }
+
+  const bucket = new GridFSBucket(db, { bucketName: "reports" });
+  const chunks: Buffer[] = [];
+  try {
+    await new Promise<void>((resolve, reject) => {
+      bucket
+        .openDownloadStream(_id)
+        .on("data", (c: Buffer) => chunks.push(c))
+        .on("error", reject)
+        .on("end", () => resolve());
+    });
+  } catch {
+    return Response.json({ error: "Could not read report" }, { status: 500 });
+  }
+
+  return new Response(new Uint8Array(Buffer.concat(chunks)), {
+    headers: {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Disposition": `attachment; filename="${String(file.filename ?? "report.docx")}"`,
+      "Cache-Control": "no-store",
+    },
+  });
+}
